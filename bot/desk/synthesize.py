@@ -552,19 +552,25 @@ def translate_to_zh(text):
 
 
 def _tokens_preserved(src, out):
-    """True if every number and ALL-CAPS ticker in `src` also appears in `out`.
-    Guards the translation relay from silently mangling a price/size/ticker."""
+    """True if every DOLLAR AMOUNT and PERCENTAGE in `src` survives (count-wise) in
+    `out`. Guards the translation relay from mangling a placeable figure (a stop,
+    a size, a level) — the one failure that actually matters on the phone.
+
+    Deliberately does NOT check bare integers or ALL-CAPS tokens: a faithful
+    Chinese translation legitimately renders "top-3"→"前三", "10Y"→"10年期",
+    "SELL"→"卖出" etc., and flagging those caused spurious English fallbacks.
+    Commas in thousands are normalized so "$9,988" == "$9988"."""
     import re
-    def toks(s):
-        nums = re.findall(r"\d+(?:\.\d+)?", s)          # every number (prices, %, $, shares)
-        tks = re.findall(r"\b[A-Z]{2,5}\b", s)          # tickers / caps tokens
-        return Counter(nums), Counter(tks)
-    sn, st = toks(src)
-    on, ot = toks(out)
-    # every source number must survive with at least its count; tickers likewise
-    if any(on.get(k, 0) < v for k, v in sn.items()):
+    def figs(s):
+        s = re.sub(r"(?<=\d),(?=\d)", "", s)                      # 9,988 -> 9988
+        dollars = re.findall(r"\$\s?(\d+(?:\.\d+)?)", s)          # $ amounts / levels
+        pcts = re.findall(r"(\d+(?:\.\d+)?)\s?%", s)              # percentages
+        return Counter(dollars), Counter(pcts)
+    sd, sp = figs(src)
+    od, op = figs(out)
+    if any(od.get(k, 0) < v for k, v in sd.items()):
         return False
-    if any(ot.get(k, 0) < v for k, v in st.items()):
+    if any(op.get(k, 0) < v for k, v in sp.items()):
         return False
     return True
 

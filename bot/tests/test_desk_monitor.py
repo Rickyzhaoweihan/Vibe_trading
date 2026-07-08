@@ -220,11 +220,20 @@ class TestJournal(unittest.TestCase):
 
 
 class TestTranslationGuard(unittest.TestCase):
-    def test_numbers_and_tickers_must_survive(self):
-        src = "Trim NVDA $300, stop $190. Buy TSM $500."
-        self.assertTrue(S._tokens_preserved(src, "减仓 NVDA $300，止损 $190。买入 TSM $500。"))
-        self.assertFalse(S._tokens_preserved(src, "减仓 NVDA $30，止损 $190。买入 TSM $500。"))  # 300→30
-        self.assertFalse(S._tokens_preserved(src, "减仓 NVDA $300，止损 $190。买入 $500。"))     # TSM dropped
+    def test_dollar_amounts_and_pcts_must_survive(self):
+        src = "Trim NVDA $300, stop $190, 25% off. Buy TSM $500."
+        self.assertTrue(S._tokens_preserved(src, "减仓 NVDA $300，止损 $190，减 25%。买入 TSM $500。"))
+        self.assertFalse(S._tokens_preserved(src, "减仓 NVDA $30，止损 $190，减 25%。买入 TSM $500。"))  # 300→30
+        self.assertFalse(S._tokens_preserved(src, "减仓 NVDA $300，止损 $190，减 2%。买入 TSM $500。"))  # 25%→2%
+
+    def test_comma_thousands_normalized(self):
+        # a faithful translation keeping "$9,988" must PASS (was a false reject)
+        self.assertTrue(S._tokens_preserved("book $9,988 · GOOGL $1,817", "账户 $9,988 · GOOGL $1,817"))
+
+    def test_ordinals_and_caps_do_not_false_reject(self):
+        # "top-3"/"10Y"/"SELL" legitimately change form in Chinese — must NOT fall back
+        src = "top-3 at 47%; 10Y at 4.57%. SELL now."
+        self.assertTrue(S._tokens_preserved(src, "前三占 47%；10年期 4.57%。立即卖出。"))
 
 
 class TestRepeatCounts(unittest.TestCase):
