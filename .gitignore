@@ -1,7 +1,8 @@
 # ---- SECRETS — never commit -------------------------------------------------
 .env
 .env.*
-!.env.example        # the template (no real values) IS committed
+# the template (no real values) IS committed:
+!.env.example
 *.pem
 *.key
 
