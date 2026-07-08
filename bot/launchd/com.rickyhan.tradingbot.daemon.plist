@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.rickyhan.tradingbot.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/rickyhan/trading_agent/bot/run_daemon.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>25</integer></dict>
+  <key>WorkingDirectory</key><string>/Users/rickyhan/trading_agent</string>
+  <key>StandardOutPath</key><string>/Users/rickyhan/trading_agent/bot/logs/launchd.daemon.log</string>
+  <key>StandardErrorPath</key><string>/Users/rickyhan/trading_agent/bot/logs/launchd.daemon.log</string>
+  <key>RunAtLoad</key><false/>
+  <!-- KeepAlive=false on purpose: a crash must HALT, never auto-loop into the market. -->
+  <key>KeepAlive</key><false/>
+</dict></plist>

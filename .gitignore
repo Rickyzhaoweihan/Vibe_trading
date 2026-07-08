@@ -1,0 +1,32 @@
+# ---- SECRETS — never commit -------------------------------------------------
+.env
+.env.*
+!.env.example        # the template (no real values) IS committed
+*.pem
+*.key
+
+# ---- PRIVATE live financial data (your real book, orders, state) ------------
+bot/state.json
+bot/desk/positions.json
+bot/desk/positions_prev.json
+bot/desk/state.json
+bot/desk/coverage.json
+bot/desk/plan_*.json
+bot/desk/_*.json
+bot/logs/
+bot/runs/
+bot/reports/
+
+# ---- environment / caches ---------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# ---- local editor/tooling ---------------------------------------------------
+.claude/settings.local.json
+
+# ---- vendored dependency (clone separately; see README) ---------------------
+# TradingAgents/ is a vendored copy of TauricResearch/TradingAgents with its own
+# git history + license. Excluded to keep this repo yours and lean.
+TradingAgents/

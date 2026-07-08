@@ -1,0 +1,27 @@
+{
+  "refreshed_at": "2026-06-12",
+  "comment": "core_watchlist = the 3-5 long-term names the weekly Tier-3 multi-agent research (analyze.py) covers; they form the 20% core sleeve. 'tickers' is the legacy AI focus list (now unused by the daily aggressive engine, kept as a candidate pool for refreshing core_watchlist).",
+  "core_watchlist": [
+    "NVDA",
+    "AVGO",
+    "PLTR",
+    "TSM",
+    "CEG"
+  ],
+  "tickers": [
+    "NVDA",
+    "AVGO",
+    "TSM",
+    "AMD",
+    "MU",
+    "SMCI",
+    "ANET",
+    "MRVL",
+    "VRT",
+    "DELL",
+    "PLTR",
+    "CRWD",
+    "VST",
+    "CEG"
+  ]
+}

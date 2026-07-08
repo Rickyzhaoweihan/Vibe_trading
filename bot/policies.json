@@ -1,0 +1,36 @@
+{
+  "sma200_trend": {
+    "enabled": true,
+    "weight": 1.0,
+    "params": {
+      "target_frac": 0.25,
+      "stop_pct": 0.06,
+      "allow_inverse": false
+    },
+    "trailing": {},
+    "change_log": []
+  },
+  "rsi2_meanrev": {
+    "enabled": true,
+    "weight": 1.0,
+    "params": {
+      "symbol": "TQQQ",
+      "target_frac": 0.2,
+      "stop_pct": 0.06,
+      "oversold": 10.0,
+      "overbought": 70.0
+    },
+    "trailing": {},
+    "change_log": []
+  },
+  "dual_momentum": {
+    "enabled": true,
+    "weight": 1.0,
+    "params": {
+      "target_frac": 0.3,
+      "stop_pct": 0.08
+    },
+    "trailing": {},
+    "change_log": []
+  }
+}

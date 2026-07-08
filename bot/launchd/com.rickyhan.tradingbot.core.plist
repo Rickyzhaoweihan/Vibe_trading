@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.rickyhan.tradingbot.core</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/rickyhan/trading_agent/bot/run_core.sh</string>
+  </array>
+  <!-- Monday 11:00 ET: during market hours so the core intents can execute the
+       same session (research takes ~30-40 min for the watchlist). -->
+  <key>StartCalendarInterval</key>
+  <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>0</integer></dict>
+  <key>WorkingDirectory</key><string>/Users/rickyhan/trading_agent</string>
+  <key>StandardOutPath</key><string>/Users/rickyhan/trading_agent/bot/logs/launchd.core.log</string>
+  <key>StandardErrorPath</key><string>/Users/rickyhan/trading_agent/bot/logs/launchd.core.log</string>
+  <key>RunAtLoad</key><false/>
+</dict></plist>
