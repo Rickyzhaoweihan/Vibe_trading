@@ -3,7 +3,7 @@
 # Gates like run.sh, waits for the open, then hands off to the long-running
 # Python daemon which self-terminates near the close.
 set -uo pipefail
-ROOT=/Users/rickyhan/trading_agent
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 LOG=bot/logs/bot.log
 mkdir -p bot/logs bot/runs
@@ -12,7 +12,7 @@ log() { echo "[$(date '+%F %T')] [daemon-launch] $*" >> "$LOG"; }
 
 # env
 set -a; source .env; set +a
-export PATH="/Users/rickyhan/.local/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 PY=.venv/bin/python
 
 # gates

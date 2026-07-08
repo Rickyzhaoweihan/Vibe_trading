@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -189,7 +190,12 @@ def reflect_core(trades, *, stamp, apply=False):
     entries = {(e["date"], e["ticker"]): e for e in mem.load_entries() if e.get("pending")}
     if not entries:
         return 0
-    llm = ChatAnthropic(model="claude-sonnet-4-6", max_tokens=400)
+    # AUTO-TRADER component (Anthropic; model env-overridable via BRAIN_MODEL).
+    # The advisory desk never calls this and needs no Anthropic key.
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return 0
+    llm = ChatAnthropic(model=os.environ.get("BRAIN_MODEL", "claude-sonnet-4-6"),
+                        max_tokens=400)
     reflector = Reflector(llm)
     written = 0
     for oc in outcomes:

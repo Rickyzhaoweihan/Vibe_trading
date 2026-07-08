@@ -6,7 +6,7 @@
 #   wrap     ~16:30 ET  after-close note + accountability review
 #   weekly   Sun        deeper pass (also researches top scouted ideas)
 set -uo pipefail
-ROOT=/Users/rickyhan/trading_agent
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 MODE="${1:-preopen}"
 LOG=bot/logs/desk.log
@@ -15,7 +15,7 @@ mkdir -p bot/logs bot/reports
 log() { echo "[$(date '+%F %T')] [desk $MODE] $*" >> "$LOG"; }
 
 set -a; source .env 2>/dev/null; set +a
-export PATH="/Users/rickyhan/.local/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 PY=.venv/bin/python
 
 # Refresh bot/desk/positions.json from the LIVE account via a read-only relay

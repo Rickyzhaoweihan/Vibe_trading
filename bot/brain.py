@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import regime as rg
 import policies as pol
@@ -138,6 +139,13 @@ def route(regime_out, policy_perf=None, dt_budget=0, positions=None, *,
     `news` (macro/sentiment digest) and `memory` (past-decision lessons) add
     context but are optional — routing works on regime alone if both empty."""
     fb = default_route(regime_out)
+    # AUTO-TRADER component: the LLM router needs an Anthropic key. (The advisory
+    # desk never calls this and needs no Anthropic key at all.) Without a key we
+    # fall back to the deterministic route rather than erroring mid-run.
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("brain: ANTHROPIC_API_KEY not set — using deterministic default_route",
+              file=sys.stderr)
+        return fb
     try:
         import anthropic
         client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY

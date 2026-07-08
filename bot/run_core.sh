@@ -3,7 +3,7 @@
 # intents -> place during market hours. Runs once (not a daemon). Holds the
 # shared bot/.lock so the intraday daemon defers its own placements meanwhile.
 set -uo pipefail
-ROOT=/Users/rickyhan/trading_agent
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 TS=$(date +%Y%m%d_%H%M)
 RUN_DIR="bot/runs/core_$TS"
@@ -23,7 +23,7 @@ fi
 trap 'rm -rf bot/.lock' EXIT
 
 set -a; source .env; set +a
-export PATH="/Users/rickyhan/.local/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 PY=.venv/bin/python
 
 # gates

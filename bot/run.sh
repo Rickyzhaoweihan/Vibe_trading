@@ -2,7 +2,7 @@
 # Trading bot pipeline: analyze (python) -> execute (headless claude) -> reconcile (python).
 # Invoked by launchd with one arg: morning | afternoon
 set -uo pipefail
-ROOT=/Users/rickyhan/trading_agent
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 SLOT="${1:-morning}"
 TS=$(date +%Y%m%d_%H%M)
@@ -24,7 +24,7 @@ trap 'rm -rf bot/.lock' EXIT
 
 # 2. env
 set -a; source .env; set +a
-export PATH="/Users/rickyhan/.local/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 PY=.venv/bin/python
 
 # 3. gates

@@ -10,7 +10,7 @@ Three parts:
 - **`bot/desk/`** — the **advisory-only** "AI trading desk": a professional, top-down analysis layer (macro → sectors → ideas → single-name → portfolio → synthesis → memory) over the user's **real book** (margin account `<DESK_ACCOUNT>`). It **READS** that account and **never places an order** — it produces a thesis + game plan + KEEP/BUY/TRIM/SELL calls and messages them to the user, who executes manually. Fully decoupled from the auto-trader's execution path (no guardrails/state/PDT coupling). See its own section below.
 - **`TradingAgents/`** — a vendored copy of the open-source [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) multi-agent LLM framework (v0.2.5). Both `bot/` (Tier 3) and `bot/desk/` (L4 research) import it as a library to produce per-ticker research ratings. Generally treat it as a dependency, not something to modify.
 
-Dependencies live in `.venv/` (Python 3.10). The TradingAgents repo is **not** pip-installed — modules put it on `sys.path` via `sys.path.insert(0, ROOT/"TradingAgents")` while deps come from `.venv`.
+Dependencies live in `.venv/` (Python 3.10; install via `pip install -r requirements.txt`, which mirrors `TradingAgents/pyproject.toml` + extras). The TradingAgents repo is **not** pip-installed — modules put it on `sys.path` via `sys.path.insert(0, ROOT/"TradingAgents")` while deps come from `.venv`. TradingAgents is a vendored, unmodified Apache-2.0 copy (provenance: `TradingAgents/VENDORED.md`); the rest of the repo is MIT. Account IDs / alert contacts are env-driven from `.env` (`BOT_ACCOUNT`, `DESK_ACCOUNT`, `ALERT_EMAIL`, `ALERT_IMESSAGE`) — never hardcode them back into source.
 
 ## Commands
 
@@ -59,7 +59,7 @@ cd TradingAgents && ../.venv/bin/python -m pytest tests/ -v
 
 ### Scheduling (launchd)
 
-Plists in `bot/launchd/`, installed to `~/Library/LaunchAgents/`. `pmset` wakes the machine before the open.
+Templates in `bot/launchd/templates/*.plist.template` (`{{ROOT}}`/`{{PREFIX}}` placeholders); `bot/launchd/install_schedule.sh` renders + loads them into `~/Library/LaunchAgents/` (desk jobs by default; `--with-autotrader` opt-in; `--uninstall` removes only its own). The owner's live jobs run under the legacy `com.rickyhan.*` labels — installed copies are separate files, so repo changes don't affect them. `pmset` wakes the machine before the open.
 
 | Label (`com.rickyhan.tradingbot.*`) | Script | When (ET) |
 |---|---|---|
@@ -133,7 +133,7 @@ A **completely separate subsystem** from the auto-trader. It analyzes the user's
 - **L5 `portfolio.py`** — prices the real book, computes cluster concentration / crowding (`CLUSTERS`, `MOMENTUM_CLUSTERS`), and sizes defensive actions.
 - **L3 `scout.py`** — screens `SCOUT_POOL` (∪ `universe.json`) for ideas not already held, ranked by excess return + trend.
 - **L4 `research.py`** — Tier-3 TradingAgents deep research, run **only on names that earn it** (cost control): the daily pass scores each holding/idea (`research_priority`: catalyst/earnings, big move, just-traded, extension-into-unwind, never-covered, >7d stale) and researches those clearing `conf.RESEARCH["min_score"]` up to `max_daily`; quiet names **carry their last verdict forward** from `coverage.json` (which now stores `{date, verdict}` per name), and a name already researched today is skipped at wrap. `weekly`/`bootstrap` still refresh the whole book. Maps the 5-tier rating → KEEP/BUY/NEW_BUY/TRIM/SELL and attaches `conviction` / `horizon` / parsed `stop_loss` / `target`. **LLM provider is env-driven** (`BOT_LLM_PROVIDER` / `BOT_DEEP_LLM` / `BOT_QUICK_LLM` in `.env`; default Anthropic Opus/Sonnet, currently GLM 5.2 via OpenRouter).
-- **L6 `synthesize.py`** — deterministic backbone builds the iMessage digest (≤1800 chars, decision-first, with per-call entry/stop/target/conviction detail) + full markdown report; optional `--llm` relay (`prompts/desk_note.md`) writes an account-grounded `## Thesis` / `## What I Expect` (scenario+probability predictive read) / `## Game Plan`. Writes `reports/desk_<date>.md` (+ `_zh.md` translation when `DESK_LANG=zh`, the default).
+- **L6 `synthesize.py`** — deterministic backbone builds the iMessage digest (≤1800 chars, decision-first, with per-call entry/stop/target/conviction detail) + full markdown report; optional `--llm` relay (`prompts/desk_note.md`) writes an account-grounded `## Thesis` / `## What I Expect` (scenario+probability predictive read) / `## Game Plan`. Writes `reports/desk_<date>.md` (+ `_zh.md` translation when `DESK_LANG=zh`; code default is `en`).
 - **L7 `journal.py`** — appends every actionable call to `logs/desk_journal.jsonl`; `review_outcomes()` re-prices open calls for hit-rate accountability.
 
 `monitor.py` is the cheap intraday loop (600s cadence, self-terminates near close): it fires **new** alerts only (dedup via `desk/state.json`) when a per-name move ≥4%, a macro shift (10Y +8bp / VIX≥22 / BTC≥6%), an unwind-band crossing, or — most importantly — a price hitting an entry/stop level from today's `plan_<date>.json` (the "good time to trade now" alert).
@@ -147,7 +147,7 @@ A **completely separate subsystem** from the auto-trader. It analyzes the user's
 - **`desk/state.json`** — **desk-only** alert-dedup state; do **not** confuse with the auto-trader's `bot/state.json`.
 - **`logs/desk_journal.jsonl`** / **`logs/desk_heartbeat.json`** — call ledger / per-mode heartbeat for the watchdog.
 - Each module runs as a flat script and self-bootstraps `sys.path` (desk dir + parent `bot/` dir) so it can import sibling desk modules and reuse auto-trader modules (`regime`, `signals`, `notify`).
-- Env: `DESK_LANG` (`zh` default → translate report before sending; `en` = English as-is) · `DESK_SNAP_EVERY` (intraday account re-snapshot cadence in monitor ticks; `0` disables).
+- Env: `DESK_LANG` (`en` default; `zh` → translate report before sending — the owner sets `zh` in `.env`) · `DESK_SNAP_EVERY` (intraday account re-snapshot cadence in monitor ticks; `0` disables).
 
 ## Key files & data flow
 

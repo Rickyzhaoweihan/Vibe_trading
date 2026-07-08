@@ -36,9 +36,9 @@ ACCOUNT = os.environ.get("DESK_ACCOUNT", "")
 # iMessage subject prefix for desk messages.
 MSG_PREFIX = "Desk"
 
-# Delivery language: "zh" translates the report to Simplified Chinese before
-# sending; "en" sends English as-is. Override with DESK_LANG.
-DELIVER_LANG = os.environ.get("DESK_LANG", "zh")
+# Delivery language: "en" sends English as-is (default); "zh" translates the
+# report to Simplified Chinese before sending. Override with DESK_LANG in .env.
+DELIVER_LANG = os.environ.get("DESK_LANG", "en")
 
 # ---- universes ----------------------------------------------------------
 
