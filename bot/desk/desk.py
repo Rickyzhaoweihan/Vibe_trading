@@ -185,12 +185,14 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
                               "weight": pf_values.get(s, 0.0) / pf_total,
                               "earnings_days": edays.get(s), "unwind_band": band,
                               "stale": st, "traded": s in traded_syms,
-                              "actionable_prior": actionable_prior})
+                              "actionable_prior": actionable_prior,
+                              "hbm_focus": s in conf.HBM_FOCUS})
             idea_items = []
             for i in cand_ideas:
                 idea_items.append({"ticker": i["ticker"], "held": False, "scout_score": i.get("score"),
                                    "earnings_days": edays.get(i["ticker"]), "unwind_band": band,
-                                   "stale": L4.stale_days(i["ticker"], date, cov)})
+                                   "stale": L4.stale_days(i["ticker"], date, cov),
+                                   "hbm_focus": i["ticker"] in conf.HBM_FOCUS})
 
             # RESERVE slots for the top new ideas (they're already ranked by the
             # scout: entry-quality + diversification), then fill the rest with
@@ -332,6 +334,21 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
              "when": c.get("when"), "last": c.get("entry")}
             for c in calls
             if c.get("action") in ("BUY", "NEW_BUY", "TRIM", "SELL") or c.get("stop_loss")]
+    # IPO/new-listing entry watch: a fresh listing has no history for the research
+    # pipeline yet, so inject an entry-zone watch (buy on a pullback to the ref
+    # price, not the day-1 pop). The monitor then pings you when price hits it.
+    planned = {p["ticker"] for p in plan}
+    ipo_watch = []
+    for tkr, info in conf.IPO_WATCH.items():
+        if tkr in planned or tkr in holdings:
+            continue
+        px = rg.indicators(market.get(tkr, {})).get("last")
+        plan.append({"ticker": tkr, "action": "NEW_BUY", "dollars": None,
+                     "entry_zone": info["ref_price"], "stop": None,
+                     "when": info["note"], "last": px})
+        ipo_watch.append({"ticker": tkr, "ref_price": info["ref_price"],
+                          "note": info["note"], "last": px})
+    context["ipo_watch"] = ipo_watch
     # preopen and wrap share plan_<date>.json; don't let a later run (e.g. wrap)
     # wipe a non-empty same-day plan the monitor is actively watching with an empty
     # one — that would kill all intraday entry/stop alerts for the rest of the day.

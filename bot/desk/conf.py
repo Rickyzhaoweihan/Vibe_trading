@@ -109,6 +109,21 @@ RESEARCH = {
     "reserve_ideas": int(os.environ.get("DESK_RESERVE_IDEAS", "2")),
 }
 
+# HBM / AI-memory complex — the user wants these deep-researched harder + more
+# often (the AI-memory supercycle is the book's core thesis). Names here get a
+# research-priority boost so they clear the gate and rotate through more.
+HBM_FOCUS = {"MU", "SKHY", "SNDK", "NVDA", "AVGO", "MRVL"}
+
+# IPO / new-listing entry watch. A brand-new listing has no price history, so the
+# scout/deep-research pipeline can't rank it for weeks — this bridges the gap: the
+# desk injects an entry-zone watch into the plan so the monitor pings you when the
+# price pulls back to a disciplined entry (NOT the day-1 pop). Remove once the name
+# has enough history to be researched normally.
+IPO_WATCH = {
+    "SKHY": {"ref_price": 158.26, "listed": "2026-07-10",
+             "note": "SK Hynix IPO（HBM 龙头，62%份额）— 回调至发行价 ~$158 附近买入，勿追首日高开"},
+}
+
 # Fallback protective stop (fraction below live price) for a held name whose deep
 # research didn't state one — so nothing the desk holds is ever left unmonitored.
 DEFAULT_STOP_PCT = float(os.environ.get("DESK_DEFAULT_STOP_PCT", "0.12"))
@@ -157,7 +172,7 @@ CRYPTO_MAJORS = ["BTC-USD", "ETH-USD", "SOL-USD"]
 SCOUT_POOL = [
     # AI / semis / hardware (the crowded complex — kept, but not the whole pool)
     "NVDA", "AVGO", "AMD", "TSM", "MU", "SMCI", "ANET", "MRVL", "VRT", "DELL",
-    "PLTR", "CRWD", "ARM", "QCOM", "LRCX", "KLAC",
+    "PLTR", "CRWD", "ARM", "QCOM", "LRCX", "KLAC", "SKHY",
     # software / internet / comm
     "META", "AAPL", "NFLX", "AMZN", "GOOGL", "MSFT", "TSLA", "ORCL", "NOW",
     "PANW", "SNOW", "DDOG", "ADBE", "CRM", "UBER",
@@ -173,7 +188,7 @@ SCOUT_POOL = [
 # Which "bet" each holding really belongs to. The momentum/AI-semis complex is
 # the crowded factor we watch for unwind risk.
 CLUSTERS = {
-    "memory":       ["MU", "SNDK"],
+    "memory":       ["MU", "SNDK", "SKHY"],
     "ai_semis":     ["NVDA", "MRVL", "INTC", "AVGO", "AMD", "TSM", "SMCI", "SMH"],
     "megacap_tech": ["MSFT", "GOOGL", "AMZN", "META", "AAPL", "NFLX"],
     "index_beta":   ["QQQ", "VOO", "SPY"],

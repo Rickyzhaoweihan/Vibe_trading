@@ -112,6 +112,13 @@ class TestSelect(unittest.TestCase):
                  {"ticker": "B", "held": True, "weight": 0.02}]
         self.assertEqual(L4.select_for_research(items, max_n=8, min_score=25), [])
 
+    def test_hbm_focus_boost(self):
+        # an HBM/AI-memory name the owner wants researched harder gets a boost
+        base, _ = L4.research_priority(held=True, weight=0.02)
+        boosted, reasons = L4.research_priority(held=True, weight=0.02, hbm_focus=True)
+        self.assertGreater(boosted, base)
+        self.assertTrue(any("HBM" in r for r in reasons))
+
     def test_actionable_carried_verdict_stays_fresh(self):
         # a name we've been telling the user to TRIM must be re-researched (feasible
         # instruction vs live price); a carried KEEP need not be

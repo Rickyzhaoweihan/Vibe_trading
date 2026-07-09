@@ -169,6 +169,12 @@ def build_digest(context):
             f"{i['ticker']}({i.get('entry', i['setup'])}{'·分散' if i.get('diversifier') else ''})"
             for i in ideas[:4]))
 
+    for w in context.get("ipo_watch") or []:
+        px = f"（现价 ${w['last']:,.2f}）" if w.get("last") else "（未上市/无报价）"
+        L.append("")
+        L.append(f"🆕 关注 {w['ticker']}{px} — 入场区 ${w['ref_price']:,.2f}，"
+                 f"到价会提醒你。{w.get('note','')}")
+
     keeps = [c["ticker"] for c in calls if c.get("action") == "KEEP"]
     if keeps:
         L.append("")

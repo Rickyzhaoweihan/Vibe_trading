@@ -114,7 +114,8 @@ MAX_RESEARCH = 6
 
 def research_priority(*, held=True, move_pct=None, extended=False, weight=0.0,
                       earnings_days=None, unwind_band="low", scout_score=None,
-                      stale="skip", traded=False, actionable_prior=False):
+                      stale="skip", traded=False, actionable_prior=False,
+                      hbm_focus=False):
     """Pure priority score for spending a deep-research slot on a name.
 
     Ranks by catalyst (imminent earnings), today's move, extension into an
@@ -124,9 +125,11 @@ def research_priority(*, held=True, move_pct=None, extended=False, weight=0.0,
     deep research (None = never), or "skip" to ignore the coverage signal.
     `actionable_prior` = the carried verdict tells the user to trade (BUY/TRIM/
     SELL): those must stay FRESH so the instruction is feasible against the live
-    price — a KEEP is safe to carry, a trade call is not.
+    price. `hbm_focus` = an HBM/AI-memory name the owner wants researched harder.
     """
     score, reasons = 0.0, []
+    if hbm_focus:
+        score += 18; reasons.append("HBM/AI存储重点")           # user wants these deep-researched more
     if actionable_prior and stale not in ("skip", None, 0):
         score += 28; reasons.append("上次为可执行建议，需按现价复核")   # keep trade calls current
     if traded:
@@ -180,7 +183,8 @@ def select_for_research(items, *, max_n=MAX_RESEARCH, min_score=0.0):
             extended=it.get("extended", False), weight=it.get("weight", 0.0),
             earnings_days=it.get("earnings_days"), unwind_band=it.get("unwind_band", "low"),
             scout_score=it.get("scout_score"), stale=it.get("stale", "skip"),
-            traded=it.get("traded", False), actionable_prior=it.get("actionable_prior", False))
+            traded=it.get("traded", False), actionable_prior=it.get("actionable_prior", False),
+            hbm_focus=it.get("hbm_focus", False))
         if s >= min_score:
             scored.append({"ticker": it["ticker"], "held": it.get("held", True),
                            "score": s, "reasons": reasons})
