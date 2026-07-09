@@ -54,25 +54,18 @@ emit a top-level `#` title — start directly at `## Market Pulse`):
    never invent data not in the context — reason from the panel, the calls'
    stops/targets, and the unwind read.
 
-4. **Game Plan** — a numbered list of concrete, prioritized actions tied to the
-   calls and the net-exposure target. Each item: the action, ticker(s), the size
-   ($ AND the approximate share count from the call), the entry/stop/target level
-   where given, and a one-line reason. Include **one hedge line** from the `hedge`
-   block — the owner wants a standing downside hedge — naming the instrument and
-   $ size, and (only if the pick is the -3x SQQQ) the one-line decay caveat. Be
-   decisive and specific — the owner executes these by hand.
+4. **Priorities** — 2–4 short bullets on WHAT MATTERS today and what changed since
+   yesterday (a new setup, a level to watch, a name you already acted on). This is
+   guidance, NOT the order ticket.
 
-   **Doability rules (the owner complained plans were repetitive and vague):**
-   - Total buys must fit inside `cash` (the calls are already capped — don't
-     exceed them). Never propose spending money the account doesn't have.
-   - A call with `repeat_days` is one you've ALREADY given N days running: don't
-     re-pitch it as new. Either say "第N+1天重复：仍建议…还差多少没做" in one short
-     line, or escalate/drop it with a reason. The plan should lead with what
-     CHANGED since yesterday (new levels, new names, done items), not restate.
-   - If the owner's `activity` shows they already executed part of a prior call,
-     mark it done and remove it from the plan.
-   - Every line must be placeable in the Robinhood app as-is: ticker + buy/sell +
-     $ or shares + limit level. No "consider", no "monitor closely" as an action.
+**CRITICAL — do NOT invent or restate trade dollar amounts or share counts.** The
+exact, cash-checked, position-checked sizes are computed deterministically and
+appended as a separate "## Game Plan" and "## Calls" section below your text —
+that is the single source of truth for how much to trade. In your prose refer to
+actions qualitatively ("trim the extended semis winners", "start the PSQ hedge",
+"add GOOGL on a pullback") and cite only price LEVELS (stops/targets/entries) from
+the context — never a "$X to buy/sell" figure. If you state a dollar trade size,
+it may contradict the feasible sized plan and mislead the owner.
 
 Keep it tight and professional; the owner reads this on a phone. Do not invent
 data not present in the context.

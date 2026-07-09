@@ -230,9 +230,32 @@ def sqqq_decision(regime_label, unwind_band, confirm_rating):
     return False, "Calm-enough tape — -1x PSQ; the -3x stays holstered until risk builds."
 
 
+def audit_feasibility(calls, values, cash):
+    """LAST-LINE feasibility gate: flag any actionable call that cannot be placed
+    against the live book — a SELL/TRIM bigger than the position you hold, or buys
+    that together exceed available cash. Pure. Returns 'INFEASIBLE:'-prefixed
+    strings (empty when everything is placeable). This is a guarantee: even if
+    sizing logic regresses or an LLM slips a number in, an un-executable
+    instruction gets caught and surfaced instead of shipped."""
+    out = []
+    budget = float(cash or 0.0)
+    for c in calls:
+        a, sym, d = c.get("action"), c.get("ticker"), c.get("dollars")
+        if not d or d <= 0:
+            continue
+        v = values.get(sym, 0.0) or 0.0
+        if a in ("SELL", "TRIM") and d > v * 1.02 + 0.5:
+            out.append(f"INFEASIBLE: {a} {sym} ${d:,.0f} but the position is only ${v:,.0f}")
+        elif a in ("BUY", "NEW_BUY"):
+            if d > budget + 0.5:
+                out.append(f"INFEASIBLE: BUY {sym} ${d:,.0f} exceeds remaining cash ${budget:,.0f}")
+            budget = max(0.0, budget - d)
+    return out
+
+
 def hedge_plan(*, equity, regime_label, unwind_band, current_net, net_target,
                crowding=0.0, base_hedge=None, primary="PSQ", tactical="SQQQ",
-               confirm_rating=None):
+               confirm_rating=None, cash=None):
     """Size a downside hedge from inverse ETFs so the book gains when the market
     falls. Pure.
 
@@ -267,12 +290,21 @@ def hedge_plan(*, equity, regime_label, unwind_band, current_net, net_target,
     strong_risk = needs_sqqq_confirm(regime_label, unwind_band)
     use_tactical, confirm_note = sqqq_decision(regime_label, unwind_band, confirm_rating)
 
+    # FEASIBILITY: a hedge is a BUY — you can't deploy more than the cash you have.
+    # Cap the capital of each option (and the notional it can neutralize) at cash.
     def _opt(tkr):
         spec = conf.HEDGE_INSTRUMENTS.get(tkr, {})
         lev = spec.get("leverage", 1)
-        return {"ticker": tkr, "capital": round(notional / lev),
-                "neutralizes": notional, "leverage": lev,
-                "holdable": spec.get("holdable", True), "note": spec.get("note", "")}
+        cap = round(notional / lev)
+        neutral = notional
+        capped = False
+        if cash is not None and cap > cash:
+            cap = round(cash)
+            neutral = round(cash * lev)          # what that affordable capital hedges
+            capped = True
+        return {"ticker": tkr, "capital": cap, "neutralizes": neutral, "leverage": lev,
+                "holdable": spec.get("holdable", True), "note": spec.get("note", ""),
+                "cash_capped": capped}
 
     return {
         "target_pct": target_pct,

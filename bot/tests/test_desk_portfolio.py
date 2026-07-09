@@ -121,6 +121,53 @@ class TestPortfolio(unittest.TestCase):
         self.assertIn("No portfolio action", acts[0])
 
 
+class TestFeasibilityAudit(unittest.TestCase):
+    def test_all_feasible_is_clean(self):
+        calls = [{"action": "TRIM", "ticker": "MU", "dollars": 200},
+                 {"action": "SELL", "ticker": "SPCX", "dollars": 150},
+                 {"action": "BUY", "ticker": "AMD", "dollars": 300}]
+        vals = {"MU": 800, "SPCX": 150}
+        self.assertEqual(L5.audit_feasibility(calls, vals, cash=500), [])
+
+    def test_trim_bigger_than_position_flagged(self):
+        calls = [{"action": "TRIM", "ticker": "MRVL", "dollars": 378}]
+        w = L5.audit_feasibility(calls, {"MRVL": 245}, cash=1000)
+        self.assertTrue(w and w[0].startswith("INFEASIBLE") and "MRVL" in w[0])
+
+    def test_sell_exceeding_holding_flagged(self):
+        w = L5.audit_feasibility([{"action": "SELL", "ticker": "X", "dollars": 500}],
+                                 {"X": 100}, cash=0)
+        self.assertTrue(w and "INFEASIBLE" in w[0])
+
+    def test_buys_exceeding_cash_flagged(self):
+        calls = [{"action": "BUY", "ticker": "A", "dollars": 400},
+                 {"action": "NEW_BUY", "ticker": "B", "dollars": 400}]
+        w = L5.audit_feasibility(calls, {}, cash=500)   # 400+400 > 500
+        self.assertTrue(any("exceeds remaining cash" in x for x in w))
+
+    def test_keep_and_null_ignored(self):
+        calls = [{"action": "KEEP", "ticker": "A"}, {"action": "TRIM", "ticker": "B", "dollars": None}]
+        self.assertEqual(L5.audit_feasibility(calls, {}, cash=0), [])
+
+
+class TestHedgeCashCap(unittest.TestCase):
+    def test_hedge_capped_by_cash(self):
+        h = L5.hedge_plan(equity=100000, regime_label="RISK_ON_TREND", unwind_band="low",
+                          current_net=0.9, net_target=0.9, crowding=0.4, base_hedge=0.05,
+                          cash=1200)   # 5% of 100k = $5000 notional, but only $1200 cash
+        psq = next(o for o in h["options"] if o["ticker"] == "PSQ")
+        self.assertEqual(psq["capital"], 1200)          # capped at cash
+        self.assertTrue(psq["cash_capped"])
+
+    def test_hedge_uncapped_when_cash_ample(self):
+        h = L5.hedge_plan(equity=10000, regime_label="RISK_ON_TREND", unwind_band="low",
+                          current_net=0.9, net_target=0.9, crowding=0.4, base_hedge=0.05,
+                          cash=5000)   # $500 notional << $5000 cash
+        psq = next(o for o in h["options"] if o["ticker"] == "PSQ")
+        self.assertEqual(psq["capital"], 500)
+        self.assertFalse(psq["cash_capped"])
+
+
 class TestHedgePlan(unittest.TestCase):
     def test_standing_floor_in_calm_tape(self):
         h = L5.hedge_plan(equity=10000, regime_label="RISK_ON_TREND",

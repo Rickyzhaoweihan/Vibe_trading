@@ -142,7 +142,8 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
         regime_label=macro.get("label", "NEUTRAL"), unwind_band=unwind.get("band", "low"),
         current_net=pf.get("current_net", 1.0),
         net_target=macro.get("exposure", {}).get("net_target", 0.70),
-        crowding=pf.get("crowding_share", 0.0), confirm_rating=confirm_rating)
+        crowding=pf.get("crowding_share", 0.0), confirm_rating=confirm_rating,
+        cash=pos.get("cash"))
     for o in hedge.get("options", []):       # attach a live price so the call is placeable
         o["price"] = rg.indicators(market.get(o["ticker"], {})).get("last")
 
@@ -291,7 +292,9 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
     # of shipping a confident-but-wrong note silently
     warnings = (H.check_positions(pos, date)
                 + H.check_market(market, _all_symbols(holdings))
-                + H.check_research(calls, research))
+                + H.check_research(calls, research)
+                # LAST-LINE feasibility gate: nothing un-executable ever ships silently
+                + L5.audit_feasibility(calls, pf.get("values", {}), cash))
 
     context = {
         "date": date, "mode": mode, "macro": macro, "sectors": sectors,
@@ -347,7 +350,8 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
 
     # heartbeat: a stale-book or no-data warning marks the run NOT ok so the
     # watchdog catches it (a wrong book is worse than no note)
-    critical = any(w.startswith("POSITIONS") or "NOTHING" in w or "FAILED for ALL" in w
+    critical = any(w.startswith("POSITIONS") or w.startswith("INFEASIBLE")
+                   or "NOTHING" in w or "FAILED for ALL" in w
                    for w in warnings)
     H.write_heartbeat(mode, date=date, at=datetime.now(ET).isoformat(timespec="seconds"),
                       ok=not critical, warnings=warnings)

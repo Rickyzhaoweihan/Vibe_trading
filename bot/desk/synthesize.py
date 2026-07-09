@@ -745,6 +745,29 @@ def enrich_with_llm(context, *, run_dir, prompt="desk_note.md"):
         r = subprocess.run(
             ["claude", "-p", prompt, "--allowedTools", ro_tools, "--output-format", "text"],
             capture_output=True, text=True, timeout=240, cwd=str(conf.ROOT), env=_relay_env())
-        return r.stdout.strip() or None
+        out = r.stdout.strip() or None
+        # Backstop: reject the enrichment if it contains a $ figure grossly beyond
+        # the whole account — a gross hallucination (the deterministic sized plan is
+        # the source of truth, so dropping the prose is always safe).
+        if out and not _dollars_within(out, context, factor=1.2):
+            return None
+        return out
     except Exception:
         return None
+
+
+def _dollars_within(text, context, *, factor=1.2):
+    """False if `text` states any $ amount larger than `factor`× the account's total
+    value — a figure that big can't be a real trade/level for this book."""
+    import re
+    pf = context.get("portfolio", {}) or {}
+    total = (pf.get("total_value", 0) or 0) + (context.get("cash", 0) or 0)
+    if total <= 0:
+        return True
+    for m in re.findall(r"\$\s?([0-9][0-9,]*(?:\.[0-9]+)?)", text):
+        try:
+            if float(m.replace(",", "")) > total * factor:
+                return False
+        except ValueError:
+            continue
+    return True
