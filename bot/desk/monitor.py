@@ -148,16 +148,18 @@ def load_plan(date):
         return []
 
 
-def plan_triggers(plan, market, *, held=None, near_pct=None):
+def plan_triggers(plan, market, *, held=None, qty=None, near_pct=None):
     """Fire when intraday price reaches (or approaches) a planned entry/stop level
     from the day's report — the proactive 'good time to trade NOW' alerts.
 
-    `held` is the LIVE held set: the plan file is written once at preopen, so
-    without this cross-check the monitor keeps telling the user to sell/stop-out
-    of names they already sold (or to enter a NEW_BUY they already bought).
-    Position-exit alerts (stop / trim / sell) require the name to still be held;
-    a NEW_BUY entry alert stops once the name shows up in the book."""
+    `held` is the LIVE held set and `qty` a LIVE {symbol: shares} map (both from
+    the freshest snapshot). The plan file is written ONCE at preopen, so its trim
+    size can be stale — if you've since trimmed the position, the old dollar amount
+    is wrong and the trim is largely done. So exit/trim alerts (a) require the name
+    still held, (b) RE-SIZE off your current position value, and (c) go quiet once
+    the position is too small to trim meaningfully."""
     near_pct = conf.ALERT.get("near_entry_pct", 0.012) if near_pct is None else near_pct
+    qty = qty or {}
     fired = []
     for c in plan or []:
         sym = c.get("ticker")
@@ -183,10 +185,26 @@ def plan_triggers(plan, market, *, held=None, near_pct=None):
                           "detail": f"🛑 {sym} 跌破止损 ${stop:,.2f}（现价 ${last:,.2f}）— 考虑离场"})
         if act in ("TRIM", "SELL") and known_held:         # never nag to sell a name already gone
             pc = ind.get("prev_close")
+            q = qty.get(sym)                                # None => live size unknown
             if pc and last >= pc * 1.02:
                 verb = "减仓" if act == "TRIM" else "卖出"
-                fired.append({"kind": f"exit:{sym}", "ticker": sym,
-                              "detail": f"📈 {sym} 走强 +{(last/pc-1)*100:.1f}% — 可逢强{verb}{amt_s}"})
+                if q is None:                              # unknown size — fall back to the plan amount
+                    fired.append({"kind": f"exit:{sym}", "ticker": sym,
+                                  "detail": f"📈 {sym} 走强 +{(last/pc-1)*100:.1f}% — 可逢强{verb}{amt_s}"})
+                else:
+                    held_val = q * last                    # LIVE position value
+                    plan_amt = c.get("dollars") or 0
+                    # ALREADY-TRIMMED guard: if you now hold less than the morning
+                    # plan wanted to trim, you've already done it — go quiet (the
+                    # MRVL "keeps telling me to trim $ I don't have" bug).
+                    already_done = act == "TRIM" and plan_amt and held_val < plan_amt
+                    if held_val >= 5 and not already_done:
+                        # re-size off the CURRENT position so a stale morning amount
+                        # can never exceed what you actually hold now
+                        live_amt = round(held_val if act == "SELL" else held_val * 0.33)
+                        fired.append({"kind": f"exit:{sym}", "ticker": sym,
+                                      "detail": f"📈 {sym} 走强 +{(last/pc-1)*100:.1f}% — 可逢强{verb} "
+                                                f"约 ${live_amt:,.0f}（现持 ${held_val:,.0f}）"})
     return fired
 
 
@@ -216,8 +234,10 @@ def _save_state(st):
 
 
 # alert kinds that RE-FIRE while the condition persists (a 'good time to trade'
-# ping is easy to miss); everything else stays once-per-day.
-_REFIRE_PREFIXES = ("entry:", "near:", "stop:", "exit:", "hedgestop:", "hedgerev:")
+# ping is easy to miss); everything else stays once-per-day. `hedgerev:` is
+# deliberately NOT here — a -3x hedge bleeding while the market rises is EXPECTED,
+# not an action item, so it fires once/day, not every 15 min.
+_REFIRE_PREFIXES = ("entry:", "near:", "stop:", "exit:", "hedgestop:")
 
 
 def _fresh(triggers, state, date, *, now_min=None, refire_minutes=None):
@@ -238,7 +258,7 @@ def _fresh(triggers, state, date, *, now_min=None, refire_minutes=None):
     for t in triggers:
         key = f"{date}:{t['kind']}:{t['ticker']}"
         if t["kind"].startswith(_REFIRE_PREFIXES):
-            r = hedge_refire if t["kind"].startswith(("hedgestop:", "hedgerev:")) else book_refire
+            r = hedge_refire if t["kind"].startswith("hedgestop:") else book_refire
             if r:
                 key += f":{int(now_min // r)}"
         if key not in seen:
@@ -284,10 +304,12 @@ def tick(holdings, *, cfg=None, dry=False, llm=False, date=None):
     # UNREADABLE — don't let a lost snapshot resurrect exit alerts for sold names).
     held = None if pos_doc is None else {
         p.get("symbol") for p in pos_doc.get("positions", []) if (p.get("quantity") or 0) > 0}
+    qty = {} if pos_doc is None else {
+        p.get("symbol"): (p.get("quantity") or 0.0) for p in pos_doc.get("positions", [])}
 
     triggers = []
     triggers += hedge_triggers(pos_doc, market, cfg=conf.HEDGE_MONITOR)   # tight -3x stop FIRST
-    triggers += plan_triggers(plan, market, held=held)   # 'good time to trade' — live-book aware
+    triggers += plan_triggers(plan, market, held=held, qty=qty)   # live-book aware + re-sized
     for s in holdings:
         triggers += name_triggers(s, rg.indicators(market.get(s, {})), cfg)
     triggers += macro_triggers(market, vix, cfg)
@@ -305,7 +327,12 @@ def tick(holdings, *, cfg=None, dry=False, llm=False, date=None):
             sharpened = L6.enrich_with_llm({"date": date, "alerts": fresh},
                                            run_dir=BOT_DIR / "runs" / f"desk_alert_{date}",
                                            prompt="desk_alert.md")
-            body = sharpened or body
+            # NUMERIC GUARD: the LLM must not invent or alter a $ amount / % (it once
+            # rewrote a $378 trim as "$3000"). Only use the sharpened text if every
+            # figure in it already appears in the deterministic body; else send the
+            # deterministic body verbatim.
+            if sharpened and L6._tokens_preserved(sharpened, body):
+                body = sharpened
         L6.send_imessage(f"{conf.MSG_PREFIX} ALERT {date}", body)
         _save_state(state)
     return {"all": triggers, "fresh": fresh, "sent": bool(fresh)}

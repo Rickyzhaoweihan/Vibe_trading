@@ -445,15 +445,35 @@ def _relay_env():
     return env
 
 
+def _log_message(subject, body, ok):
+    """Append every outgoing message to logs/desk_messages.jsonl — a full audit
+    trail of exactly what was sent to the phone (digests, reports, alerts)."""
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo
+        rec = {"at": _dt.now(ZoneInfo("America/New_York")).isoformat(timespec="seconds"),
+               "subject": subject, "body": body, "sent": bool(ok)}
+        p = conf.LOGS_DIR / "desk_messages.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def send_imessage(subject, body):
-    """Send via the existing notify.py (iMessage → Mail/SMTP fallback)."""
+    """Send via the existing notify.py (iMessage → Mail/SMTP fallback). Every
+    message is logged to logs/desk_messages.jsonl regardless of send outcome."""
     py = str(conf.ROOT / ".venv" / "bin" / "python")
+    ok = False
     try:
         subprocess.run([py, str(BOT_DIR / "notify.py"), subject],
                        input=body, text=True, capture_output=True, timeout=90)
-        return True
+        ok = True
     except Exception:
-        return False
+        ok = False
+    _log_message(subject, body, ok)
+    return ok
 
 
 def chunk_md(text, *, size=1500):

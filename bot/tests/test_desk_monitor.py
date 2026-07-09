@@ -106,6 +106,23 @@ class TestTriggers(unittest.TestCase):
     def test_hedge_no_position_no_trigger(self):
         self.assertEqual(M.hedge_triggers({"positions": [{"symbol": "NVDA", "quantity": 1}]}, {}), [])
 
+    def test_exit_suppressed_when_already_trimmed(self):
+        # morning plan wanted to trim $378; you now hold only ~$245 => already done, hush
+        plan = [{"ticker": "MRVL", "action": "TRIM", "dollars": 378}]
+        market = {"MRVL": {"closes": [230, 245]}}            # +6.5% strength
+        fired = M.plan_triggers(plan, market, held={"MRVL"}, qty={"MRVL": 1.0})  # 1 sh × 245 = $245 < 378
+        self.assertEqual([f for f in fired if f["kind"].startswith("exit")], [])
+
+    def test_exit_resized_off_live_position(self):
+        # still a real position ($2450) -> trim alert re-sized off LIVE value, not stale plan $
+        plan = [{"ticker": "MRVL", "action": "TRIM", "dollars": 378}]
+        market = {"MRVL": {"closes": [230, 245]}}
+        fired = M.plan_triggers(plan, market, held={"MRVL"}, qty={"MRVL": 10.0})  # $2450 held
+        exits = [f for f in fired if f["kind"] == "exit:MRVL"]
+        self.assertTrue(exits)
+        self.assertIn("现持 $2,450", exits[0]["detail"])       # shows live position
+        self.assertNotIn("3,000", exits[0]["detail"])
+
     def test_plan_exit_and_stop_suppressed_after_user_sold(self):
         # the user sold QQQ/TSM mid-session: exit/stop alerts must stop firing
         plan = [{"ticker": "QQQ", "action": "TRIM", "dollars": 300, "stop": 700.0},
