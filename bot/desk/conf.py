@@ -103,6 +103,10 @@ RESEARCH = {
     "min_score": int(os.environ.get("DESK_RESEARCH_MIN_SCORE", "25")),  # priority score a name needs
     "max_daily": int(os.environ.get("DESK_RESEARCH_MAX", "8")),         # hard cap per run
     "stale_refresh_days": 7,        # even a quiet name gets re-researched weekly
+    # RESERVED deep-research slots for the top NEW scouted ideas each run — so an
+    # interesting new name always earns the multi-agent analysis before you'd act
+    # on it, instead of losing every slot to holdings.
+    "reserve_ideas": int(os.environ.get("DESK_RESERVE_IDEAS", "2")),
 }
 
 # Fallback protective stop (fraction below live price) for a held name whose deep

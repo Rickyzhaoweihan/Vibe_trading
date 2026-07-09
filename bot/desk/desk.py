@@ -185,12 +185,32 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
                               "earnings_days": edays.get(s), "unwind_band": band,
                               "stale": st, "traded": s in traded_syms,
                               "actionable_prior": actionable_prior})
+            idea_items = []
             for i in cand_ideas:
-                items.append({"ticker": i["ticker"], "held": False, "scout_score": i.get("score"),
-                              "earnings_days": edays.get(i["ticker"]), "unwind_band": band,
-                              "stale": L4.stale_days(i["ticker"], date, cov)})
-            research_selected = L4.select_for_research(
-                items, max_n=conf.RESEARCH["max_daily"], min_score=conf.RESEARCH["min_score"])
+                idea_items.append({"ticker": i["ticker"], "held": False, "scout_score": i.get("score"),
+                                   "earnings_days": edays.get(i["ticker"]), "unwind_band": band,
+                                   "stale": L4.stale_days(i["ticker"], date, cov)})
+
+            # RESERVE slots for the top new ideas (they're already ranked by the
+            # scout: entry-quality + diversification), then fill the rest with
+            # holdings that earn it — so interesting new names get deep research
+            # instead of always losing to the book.
+            reserve = conf.RESEARCH.get("reserve_ideas", 0)
+            fresh_ideas = [i for i in cand_ideas
+                           if L4.stale_days(i["ticker"], date, cov) != 0]   # not already done today
+            reserved = [{"ticker": i["ticker"], "held": False,
+                         "score": i.get("scout_score", 0), "reasons": ["new idea (reserved slot)"]}
+                        for i in fresh_ideas[:reserve]]
+            reserved_set = {r["ticker"] for r in reserved}
+            holdings_room = max(0, conf.RESEARCH["max_daily"] - len(reserved))
+            holding_sel = L4.select_for_research(
+                items, max_n=holdings_room, min_score=conf.RESEARCH["min_score"])
+            # any remaining ideas still compete on merit for leftover holding room
+            extra_ideas = L4.select_for_research(
+                [it for it in idea_items if it["ticker"] not in reserved_set],
+                max_n=max(0, holdings_room - len(holding_sel)),
+                min_score=conf.RESEARCH["min_score"])
+            research_selected = reserved + holding_sel + extra_ideas
             # analyze_chunks (not _parallel) so all selected names run even when
             # max_daily exceeds the per-batch cap of 6 — otherwise 7-8 would be
             # listed as researched but silently fall through to carried verdicts.
