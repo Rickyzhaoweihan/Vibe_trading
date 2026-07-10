@@ -245,6 +245,15 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
     else:
         calls = _cheap_calls(holdings, market)
 
+    # A held hedge instrument (PSQ/SH/SQQQ) is managed by the HEDGE ENGINE, not by
+    # rating it as a stock — otherwise deep research emits "SELL PSQ" while the
+    # hedge section says "hold PSQ", a contradictory (un-executable) plan. Force
+    # such names to KEEP so the hedge section is the single source of truth.
+    for c in calls:
+        if c["ticker"] in conf.HEDGE_TICKERS and c.get("action") in ("SELL", "TRIM", "BUY", "NEW_BUY"):
+            c["action"] = "KEEP"
+            c["reason"] = "对冲工具，由对冲模块统一管理（见下方对冲部分）"
+
     prices = {c["ticker"]: rg.indicators(market.get(c["ticker"], {})).get("last")
               for c in calls}
 
