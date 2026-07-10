@@ -547,34 +547,77 @@ def send_report(subject, report):
     return len(parts)
 
 
+def _cjk_ratio(s):
+    """Fraction of the letters in `s` that are CJK — used to detect a chunk the
+    translator left in English."""
+    cjk = sum(1 for c in s if "一" <= c <= "鿿")
+    latin = sum(1 for c in s if c.isascii() and c.isalpha())
+    tot = cjk + latin
+    return (cjk / tot) if tot else 1.0
+
+
+def _glm_translate(text, *, timeout=120, max_tokens=6000):
+    """Translate one markdown chunk to Simplified Chinese via a DIRECT OpenRouter
+    API call (default GLM — a Chinese model, ideal for this). A plain chat call is
+    far more reliable than the `claude -p` agent, which left long reports
+    half-English. `max_tokens` must be generous or a long chunk gets truncated
+    (which then fails the numeric guard). Returns None on any failure."""
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        return None
+    try:
+        import requests
+        model = os.environ.get("BOT_QUICK_LLM", "z-ai/glm-5.2")
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model": model, "temperature": 0, "max_tokens": max_tokens, "messages": [
+                {"role": "system", "content":
+                 "You translate a markdown trading report from English into Simplified "
+                 "Chinese. Translate ALL prose, headings, labels and table cells. Keep "
+                 "ticker symbols (NVDA, MU, PSQ, SKHY…), all numbers, %, $ amounts and "
+                 "URLs EXACTLY as-is. Preserve the markdown structure. Output ONLY the "
+                 "translated markdown — no preamble, no explanation."},
+                {"role": "user", "content": text}]},
+            timeout=timeout)
+        r.raise_for_status()
+        return (r.json()["choices"][0]["message"]["content"] or "").strip() or None
+    except Exception:
+        return None
+
+
 def translate_to_zh(text):
-    """Translate a markdown report to Simplified Chinese via a headless,
-    read-only `claude -p` pass. Best-effort — returns the original English on any
-    failure so delivery never breaks. Tickers / numbers / $ are kept verbatim."""
+    """Translate a markdown report to Simplified Chinese via direct GLM/OpenRouter
+    calls, CHUNKED by section so no chunk is long enough to get truncated. Each
+    chunk is used only if it preserves every $ amount / % and actually came back in
+    Chinese; a chunk that fails keeps its English (delivery never breaks). Returns
+    the input unchanged only if EVERY chunk failed — so `text != input` means it
+    worked."""
     if not text or not text.strip():
         return text
-    prompt = (
-        "Translate the following markdown trading report into Simplified Chinese. "
-        "Keep every ticker (e.g. NVDA, MU, QQQ), every number, percentage and $ "
-        "amount EXACTLY as-is. Preserve the markdown structure — headers, tables, "
-        "bullet lists. Translate only the prose, labels and table headers. Output "
-        "ONLY the translated markdown, no preamble or sign-off.\n\n----\n" + text
-    )
-    try:
-        r = subprocess.run(["claude", "-p", prompt, "--output-format", "text"],
-                           capture_output=True, text=True, timeout=240,
-                           cwd=str(conf.ROOT), env=_relay_env())
-        out = r.stdout.strip()
-        if not out:
-            return text
-        # A translation that drops or alters a $ amount, price level, or ticker
-        # would ship a WRONG directly-placeable instruction. Verify the numeric and
-        # ticker tokens survived unchanged; on any mismatch, deliver English.
-        if not _tokens_preserved(text, out):
-            return text
-        return out
-    except Exception:
-        return text
+    import re
+    sections = re.split(r"(?=\n## )", text)
+    chunks, cur = [], ""
+    for sec in sections:
+        if cur and len(cur) + len(sec) > 2800:
+            chunks.append(cur)
+            cur = ""
+        cur += sec
+    if cur.strip():
+        chunks.append(cur)
+
+    def _one(c):
+        zh = _glm_translate(c)
+        if zh and _tokens_preserved(c, zh) and (_cjk_ratio(c) < 0.05 or _cjk_ratio(zh) >= 0.4):
+            return (zh if zh.endswith("\n") else zh + "\n"), True
+        return c, False                       # keep this section's English on failure
+
+    # chunks are independent API calls — translate them in parallel (ordered result)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(6, len(chunks))) as ex:
+        results = list(ex.map(_one, chunks))
+    any_ok = any(ok for _, ok in results)
+    return "".join(t for t, _ in results) if any_ok else text
 
 
 def _tokens_preserved(src, out):
