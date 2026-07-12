@@ -576,12 +576,34 @@ def _cjk_ratio(s):
     return (cjk / tot) if tot else 1.0
 
 
-def _glm_translate(text, *, timeout=120, max_tokens=6000):
-    """Translate one markdown chunk to Simplified Chinese via a DIRECT OpenRouter
-    API call (default GLM — a Chinese model, ideal for this). A plain chat call is
-    far more reliable than the `claude -p` agent, which left long reports
-    half-English. `max_tokens` must be generous or a long chunk gets truncated
-    (which then fails the numeric guard). Returns None on any failure."""
+_TRANSLATE_SYS = (
+    "You translate a markdown trading report from English into Simplified "
+    "Chinese. Translate ALL prose, headings, labels and table cells. Keep "
+    "ticker symbols (NVDA, MU, PSQ, SKHY…), all numbers, %, $ amounts and "
+    "URLs EXACTLY as-is. Preserve the markdown structure. Output ONLY the "
+    "translated markdown — no preamble, no explanation.")
+
+# The final QA / supervisor pass — the owner's request: nothing goes to the phone
+# until GLM has re-read it, translated any English the first pass missed, and
+# confirmed it reads coherently. Numbers are locked (enforced again by the guard).
+_SUPERVISE_SYS = (
+    "You are the final editor reviewing a Simplified-Chinese trading note just "
+    "before it is texted to the user. Do two things: (1) rewrite ANY remaining "
+    "English word, phrase or sentence into natural Simplified Chinese so the whole "
+    "passage reads as fluent Chinese; (2) make sure it reads clearly and is not "
+    "self-contradictory (e.g. don't say both hold and sell the same name). "
+    "HARD RULES: keep every ticker symbol (NVDA, MU, PSQ, SKHY…), every number, %, "
+    "$ amount, stop/limit price level and URL EXACTLY as written — never change, "
+    "add or drop a figure. Do not invent any new facts or numbers. Preserve the "
+    "markdown structure. Output ONLY the finalized markdown — no preamble.")
+
+
+def _glm_translate(text, *, timeout=120, max_tokens=6000, system=None):
+    """One GLM/OpenRouter chat call over a markdown chunk (default: translate to
+    Simplified Chinese; pass `system=_SUPERVISE_SYS` for the final QA pass). A plain
+    chat call is far more reliable than the `claude -p` agent, which left long
+    reports half-English. `max_tokens` must be generous or a long chunk gets
+    truncated (which then fails the numeric guard). Returns None on any failure."""
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         return None
@@ -592,12 +614,7 @@ def _glm_translate(text, *, timeout=120, max_tokens=6000):
             "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={"model": model, "temperature": 0, "max_tokens": max_tokens, "messages": [
-                {"role": "system", "content":
-                 "You translate a markdown trading report from English into Simplified "
-                 "Chinese. Translate ALL prose, headings, labels and table cells. Keep "
-                 "ticker symbols (NVDA, MU, PSQ, SKHY…), all numbers, %, $ amounts and "
-                 "URLs EXACTLY as-is. Preserve the markdown structure. Output ONLY the "
-                 "translated markdown — no preamble, no explanation."},
+                {"role": "system", "content": system or _TRANSLATE_SYS},
                 {"role": "user", "content": text}]},
             timeout=timeout)
         r.raise_for_status()
@@ -638,6 +655,56 @@ def translate_to_zh(text):
         results = list(ex.map(_one, chunks))
     any_ok = any(ok for _, ok in results)
     return "".join(t for t, _ in results) if any_ok else text
+
+
+def _has_english_prose(s):
+    """True if `s` still contains English *words* (two+ consecutive lowercase
+    letters) after stripping URLs and code spans. Tickers are ALL-CAPS so they
+    don't trip this — only genuine untranslated prose does. This is what tells the
+    supervisor which sections the first translation pass left in English."""
+    import re
+    s = re.sub(r"https?://\S+", " ", s)          # keep URLs verbatim, don't flag them
+    s = re.sub(r"`[^`]*`", " ", s)               # ignore inline code
+    s = re.sub(r"\S*[:=^~]\S*", " ", s)          # data symbols: idx:^KS11, ES=F, fut:NQ=F
+    s = re.sub(r"\b\w+\.[A-Za-z]{2,4}\b", " ", s)  # source domains: Barrons.com, wsj.com
+    return bool(re.search(r"[a-z]{2,}", s))
+
+
+def supervise_zh(text):
+    """Final QA pass before anything is texted (the owner's explicit request): have
+    GLM re-read the already-translated note, turn any leftover English into Chinese,
+    and sanity-check coherence — while every $/%/level is locked. Only sections that
+    still contain English prose are re-processed (cheap, and avoids re-touching clean
+    Chinese). A re-processed section is accepted only if it preserves every figure
+    and comes back *more* Chinese than before; otherwise the original is kept, so
+    supervision can only improve delivery, never corrupt it."""
+    if not text or not text.strip():
+        return text
+    import re
+    sections = re.split(r"(?=\n## )", text)
+
+    def _fix(sec):
+        if not sec.strip() or not _has_english_prose(sec):
+            return sec                            # already clean Chinese — leave it
+        best = sec                                # ratchet toward more-Chinese, never worse
+        for _ in range(3):                        # stubborn sections get a few attempts
+            out = _glm_translate(best, system=_SUPERVISE_SYS)
+            # figures must match EXACTLY — none dropped (sec⊆out) and none the QA
+            # pass hallucinated in (out⊆sec) — and it must be strictly more Chinese.
+            if not (out and _tokens_preserved(sec, out) and _tokens_preserved(out, sec)
+                    and _cjk_ratio(out) >= _cjk_ratio(best)):
+                break                             # no gain or guard fail → stop, keep best
+            best = out
+            if not _has_english_prose(best):
+                break                             # fully Chinese now
+        return best if best.endswith("\n") else best + "\n"
+
+    todo = [s for s in sections if s]
+    if not any(_has_english_prose(s) for s in todo):
+        return text                               # nothing left to supervise
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(6, len(todo))) as ex:
+        return "".join(ex.map(_fix, todo))
 
 
 def _tokens_preserved(src, out):
@@ -781,8 +848,10 @@ def deliver(context, *, notify=True):
 
     out_digest, out_report, suffix = digest, report, ""
     if conf.DELIVER_LANG == "zh":
-        out_report = translate_to_zh(report)
-        out_digest = translate_to_zh(digest)
+        # translate, then a GLM supervisor re-reads the result and fixes any English
+        # the first pass missed + checks coherence — figures stay locked throughout.
+        out_report = supervise_zh(translate_to_zh(report))
+        out_digest = supervise_zh(translate_to_zh(digest))
         suffix = "_zh"
         try:
             (conf.REPORTS_DIR / f"desk_{date}{suffix}.md").write_text(out_report)

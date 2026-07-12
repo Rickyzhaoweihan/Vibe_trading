@@ -253,6 +253,61 @@ class TestTranslationGuard(unittest.TestCase):
         self.assertTrue(S._tokens_preserved(src, "前三占 47%；10年期 4.57%。立即卖出。"))
 
 
+class TestEnglishDetection(unittest.TestCase):
+    def test_flags_english_prose(self):
+        self.assertTrue(S._has_english_prose("## Sector Rotation"))
+        self.assertTrue(S._has_english_prose("scale in on a dip"))
+
+    def test_all_caps_tickers_are_not_prose(self):
+        # a fully-Chinese line that still names tickers/levels must NOT be flagged
+        self.assertFalse(S._has_english_prose("买入 NVDA $339，限价 $203.96，止损 $187.50"))
+        self.assertFalse(S._has_english_prose("对冲：持有约 $1,569 PSQ @ $25.41"))
+
+    def test_urls_and_code_ignored(self):
+        self.assertFalse(S._has_english_prose("来源：https://example.com/news 参见"))
+
+    def test_data_symbols_and_source_domains_not_prose(self):
+        # a fully-translated macro row / news attribution must NOT be re-flagged
+        self.assertFalse(S._has_english_prose("| idx:^KS11 | 7,291.91 | +0.6% | 上升 |"))
+        self.assertFalse(S._has_english_prose("| fut:ES=F | 7,626.00 | +0.5% | 上升 |"))
+        self.assertFalse(S._has_english_prose("沃尔什将接管美联储。（来源：Barrons.com）"))
+
+
+class TestSupervisor(unittest.TestCase):
+    """The GLM QA pass: fixes leftover English, never corrupts figures, only
+    improves. All GLM calls are stubbed so the test is offline/deterministic."""
+
+    def _run(self, fake):
+        orig = S._glm_translate
+        S._glm_translate = fake
+        try:
+            return S.supervise_zh("## 计划\n买入 NVDA $339\n\n## Sector Rotation\nleaders lagging\n")
+        finally:
+            S._glm_translate = orig
+
+    def test_translates_leftover_english_section(self):
+        out = self._run(lambda t, **k: "## 板块轮动\n领涨转落后\n")
+        self.assertIn("板块轮动", out)
+        self.assertNotIn("Sector Rotation", out)
+        self.assertIn("买入 NVDA $339", out)          # clean section untouched
+
+    def test_rejects_qa_that_alters_a_figure(self):
+        # QA that mangles $339 -> $33 must be discarded, English kept over corruption
+        out = self._run(lambda t, **k: "## 板块轮动 $33\n领涨转落后\n")
+        self.assertIn("Sector Rotation", out)          # fell back to original
+
+    def test_no_call_when_already_all_chinese(self):
+        def boom(t, **k):
+            raise AssertionError("supervisor must not call GLM on clean Chinese")
+        orig = S._glm_translate
+        S._glm_translate = boom
+        try:
+            txt = "## 计划\n买入 NVDA $339，止损 $187.50\n"
+            self.assertEqual(S.supervise_zh(txt), txt)
+        finally:
+            S._glm_translate = orig
+
+
 class TestRepeatCounts(unittest.TestCase):
     def test_counts_consecutive_prior_days(self):
         journal = [{"date": "2026-06-30", "ticker": "INTC", "action": "TRIM"},
