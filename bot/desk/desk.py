@@ -42,6 +42,7 @@ import research as L4
 import journal as L7
 import synthesize as L6
 import health as H
+import strategist as STRAT
 
 ET = ZoneInfo("America/New_York")
 
@@ -86,6 +87,22 @@ def _cheap_calls(holdings, market):
                       "reason": ("extended — watch for unwind" if ext else "technical hold")
                                 + " (deep research skipped)", "ok": False})
     return calls
+
+
+def _merge_by_ticker(base, overrides):
+    """Overlay `overrides` onto `base` calls: an override for a ticker already in
+    `base` REPLACES it (the strategist's live call / a fresh deep verdict wins over
+    a carried KEEP); a new ticker is appended. Order is preserved."""
+    idx = {c.get("ticker"): i for i, c in enumerate(base)}
+    out = list(base)
+    for o in overrides:
+        t = o.get("ticker")
+        if t in idx:
+            out[idx[t]] = o
+        else:
+            idx[t] = len(out)
+            out.append(o)
+    return out
 
 
 def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
@@ -149,15 +166,11 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
 
     research_selected = []
     if research:
-        cand_ideas = ideas.get("equity", [])[:conf.SCOUT["research_n"]]
         cov = L4.load_coverage()
-        band = unwind.get("band", "low")
-        pf_values = pf.get("values", {})
-        pf_total = pf.get("total_value", 0.0) or 1.0
-        traded_syms = {a["symbol"] for a in activity}          # names the user just traded
         full = mode in ("bootstrap", "weekly")                  # weekly/bootstrap = whole book
 
         if full:
+            cand_ideas = ideas.get("equity", [])[:conf.SCOUT["research_n"]]
             cand = [] if mode == "bootstrap" else [i["ticker"] for i in cand_ideas]
             targets = list(dict.fromkeys(holdings + cand))
             researched = L4.analyze_chunks(targets, date, held_set=set(holdings))
@@ -165,60 +178,11 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
                                   "held": r.get("held", r["ticker"] in set(holdings)),
                                   "reasons": ["full coverage"]} for r in researched]
         else:
-            # DAILY: only names that EARN a deep run — catalyst / big move / just
-            # traded / extension into unwind / never-covered / stale. Quiet names
-            # carry their last verdict forward (no re-spend).
-            edays = L4.earnings_days_map(holdings + [i["ticker"] for i in cand_ideas])
-            items = []
-            for s in holdings:
-                st = L4.stale_days(s, date, cov)
-                # already deep-researched today (e.g. at preopen) and not just
-                # traded → reuse this morning's verdict; don't pay again at wrap
-                if st == 0 and s not in traded_syms:
-                    continue
-                ind = rg.indicators(market.get(s, {}))
-                mv = (ind["last"] / ind["prev_close"] - 1.0) if ind.get("last") and ind.get("prev_close") else None
-                pv = L4.last_verdict(s, cov)     # if we've been telling the user to TRADE this, keep it fresh
-                actionable_prior = bool(pv and pv.get("action") in ("BUY", "NEW_BUY", "TRIM", "SELL"))
-                items.append({"ticker": s, "held": True, "move_pct": mv,
-                              "extended": L2.is_extended((market.get(s, {}) or {}).get("closes") or []),
-                              "weight": pf_values.get(s, 0.0) / pf_total,
-                              "earnings_days": edays.get(s), "unwind_band": band,
-                              "stale": st, "traded": s in traded_syms,
-                              "actionable_prior": actionable_prior,
-                              "hbm_focus": s in conf.HBM_FOCUS})
-            idea_items = []
-            for i in cand_ideas:
-                idea_items.append({"ticker": i["ticker"], "held": False, "scout_score": i.get("score"),
-                                   "earnings_days": edays.get(i["ticker"]), "unwind_band": band,
-                                   "stale": L4.stale_days(i["ticker"], date, cov),
-                                   "hbm_focus": i["ticker"] in conf.HBM_FOCUS})
-
-            # RESERVE slots for the top new ideas (they're already ranked by the
-            # scout: entry-quality + diversification), then fill the rest with
-            # holdings that earn it — so interesting new names get deep research
-            # instead of always losing to the book.
-            reserve = conf.RESEARCH.get("reserve_ideas", 0)
-            fresh_ideas = [i for i in cand_ideas
-                           if L4.stale_days(i["ticker"], date, cov) != 0]   # not already done today
-            reserved = [{"ticker": i["ticker"], "held": False,
-                         "score": i.get("scout_score", 0), "reasons": ["new idea (reserved slot)"]}
-                        for i in fresh_ideas[:reserve]]
-            reserved_set = {r["ticker"] for r in reserved}
-            holdings_room = max(0, conf.RESEARCH["max_daily"] - len(reserved))
-            holding_sel = L4.select_for_research(
-                items, max_n=holdings_room, min_score=conf.RESEARCH["min_score"])
-            # any remaining ideas still compete on merit for leftover holding room
-            extra_ideas = L4.select_for_research(
-                [it for it in idea_items if it["ticker"] not in reserved_set],
-                max_n=max(0, holdings_room - len(holding_sel)),
-                min_score=conf.RESEARCH["min_score"])
-            research_selected = reserved + holding_sel + extra_ideas
-            # analyze_chunks (not _parallel) so all selected names run even when
-            # max_daily exceeds the per-batch cap of 6 — otherwise 7-8 would be
-            # listed as researched but silently fall through to carried verdicts.
-            researched = L4.analyze_chunks([r["ticker"] for r in research_selected],
-                                           date, held_set=set(holdings))
+            # WEEKDAY (preopen/wrap): NO default deep research — that dominant cost
+            # now runs only on the Sunday `weekly` sweep + whatever the STRATEGIST
+            # (below) escalates on-demand. Every holding carries its last deep
+            # verdict forward here; the strategist authors the tentative actions.
+            researched = []
 
         by = {r["ticker"]: r for r in researched}
         L4.mark_researched(researched, date)                    # store date + verdict per name
@@ -244,6 +208,35 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
         calls += [r for r in researched if not r.get("held")]   # scouted ideas researched this run
     else:
         calls = _cheap_calls(holdings, market)
+
+    # ---- THE STRATEGIST — the desk's cheap, memory + news-aware brain. Weekday,
+    # it (not a heuristic) authors the tentative actions and names the rare tickers
+    # that actually earn on-demand deep research (hard-capped, GLOBAL per day). The
+    # weekly/bootstrap full sweep already covered the book, so the strategist there
+    # just adds narrative + memory. Advisory only — every action it names is sized
+    # and feasibility-checked by the deterministic pipeline below.
+    review = L7.review_outcomes()
+    strat_result = None
+    if conf.STRATEGIST["enabled"] and research:
+        partial_ctx = {"date": date, "mode": mode, "macro": macro, "unwind": unwind,
+                       "portfolio": pf, "hedge": hedge, "pulse": pulse, "calls": calls,
+                       "ideas": ideas, "activity": activity, "review": review,
+                       "cash": pos.get("cash", 0.0) or 0.0}
+        strat_result = STRAT.run_strategist(partial_ctx, mode=mode, date=date)
+        if strat_result:
+            # ON-DEMAND deep research (weekday only; weekly already swept the book)
+            if mode not in ("weekly", "bootstrap"):
+                esc = STRAT.cap_escalations(strat_result.get("escalate", []), date=date, coverage=cov)
+                if esc:
+                    deep = L4.analyze_chunks(esc, date, held_set=set(holdings))
+                    L4.mark_researched(deep, date)
+                    calls = _merge_by_ticker(calls, deep)
+                    research_selected += [{"ticker": r["ticker"], "held": r.get("held", False),
+                                           "reasons": ["strategist escalation"]} for r in deep]
+            # merge the strategist's named actions (sized by plan_trades below)
+            strat_calls, cash_stance = STRAT.actions_to_calls(
+                strat_result.get("actions", []), holdings=set(holdings))
+            calls = _merge_by_ticker(calls, strat_calls)
 
     # A held hedge instrument (PSQ/SH/SQQQ) is managed by the HEDGE ENGINE, not by
     # rating it as a stock — otherwise deep research emits "SELL PSQ" while the
@@ -297,8 +290,6 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
             c["stop_loss"] = round(c["price"] * (1 - (0.08 if lev else conf.DEFAULT_STOP_PCT)), 2)
             c["stop_default"] = True
 
-    review = L7.review_outcomes()
-
     # health: warn on a stale/seed book, degraded data, or failed research instead
     # of shipping a confident-but-wrong note silently
     warnings = (H.check_positions(pos, date)
@@ -316,7 +307,18 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
         "price_source": price_source, "thesis": "",
     }
 
-    if llm:
+    # The STRATEGIST's narrative (memory + news aware) is the primary thesis. It
+    # also carries its tentative actions into the report and updates its memory.
+    if strat_result:
+        context["strategist"] = strat_result
+        nar = STRAT.narrative_md(strat_result)
+        if nar:
+            context["thesis"] = nar
+        STRAT.save_memory(strat_result.get("memory_update"), date=date)
+
+    # Fallback: only reach for the read-only claude relay when the strategist
+    # produced no usable narrative (e.g. it failed / was disabled).
+    if llm and not context["thesis"]:
         run_dir = BOT_DIR / "runs" / f"desk_{date}_{mode}"
         thesis = L6.enrich_with_llm(context, run_dir=run_dir)
         if thesis:

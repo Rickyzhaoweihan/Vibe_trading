@@ -12,6 +12,44 @@ sys.path.insert(0, str(BOT))
 import monitor as M
 import journal as J
 import synthesize as S
+import strategist as ST
+import conf
+import tempfile
+
+
+class TestIntradayStrategist(unittest.TestCase):
+    """The intraday hook fires the strategist only on book-wide macro/unwind
+    triggers, dedups per day, and appends tentative-action text."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._os = conf.STRATEGIST_STATE_PATH
+        conf.STRATEGIST_STATE_PATH = Path(self._tmp.name) / "s.json"
+        self._run = ST.run_strategist
+        ST.run_strategist = lambda *a, **k: {
+            "actions": [{"action": "NEW_BUY", "ticker": "SQQQ", "reason": "risk-off"}]}
+
+    def tearDown(self):
+        conf.STRATEGIST_STATE_PATH = self._os
+        ST.run_strategist = self._run
+        self._tmp.cleanup()
+
+    def test_fires_on_macro_kind(self):
+        fresh = [{"kind": "rates", "ticker": "^TNX", "detail": "10Y +9bp"}]
+        out = M._intraday_strategist(fresh, {}, 16.0, ["NVDA"], {"positions": []}, "2026-07-14")
+        self.assertIn("SQQQ", out)
+
+    def test_quiet_on_per_name_only(self):
+        fresh = [{"kind": "move", "ticker": "NVDA", "detail": "NVDA +6%"}]
+        out = M._intraday_strategist(fresh, {}, 16.0, ["NVDA"], {"positions": []}, "2026-07-14")
+        self.assertEqual(out, "")
+
+    def test_dedup_same_macro_read(self):
+        fresh = [{"kind": "unwind", "ticker": "BOOK", "detail": "unwind HIGH"}]
+        first = M._intraday_strategist(fresh, {}, 22.0, ["NVDA"], {"positions": []}, "2026-07-14")
+        second = M._intraday_strategist(fresh, {}, 22.0, ["NVDA"], {"positions": []}, "2026-07-14")
+        self.assertNotEqual(first, "")
+        self.assertEqual(second, "")   # same qualifying set already handled today
 
 
 class TestTriggers(unittest.TestCase):

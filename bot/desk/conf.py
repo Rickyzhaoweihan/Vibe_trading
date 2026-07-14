@@ -22,6 +22,12 @@ POSITIONS_PREV_PATH = DESK_DIR / "positions_prev.json"  # prior snapshot, to dif
 STATE_PATH = DESK_DIR / "state.json"           # desk-only (alert dedupe); NOT the bot's state.json
 JOURNAL_PATH = LOGS_DIR / "desk_journal.jsonl"
 COVERAGE_PATH = DESK_DIR / "coverage.json"     # {ticker: last deep-research date} for the 6/day rotation
+# The strategist's rolling memory (small, bounded, rewritten each run) — kept
+# SEPARATE from the 1.1MB append-only logs/decision_memory.md (deep-research only).
+STRATEGIST_MEMORY_PATH = LOGS_DIR / "strategist_memory.md"
+# Strategist run/dedup + the GLOBAL daily deep-research escalation counter. A
+# separate file from STATE_PATH (the monitor's alert-dedup) so they never clash.
+STRATEGIST_STATE_PATH = DESK_DIR / "strategist_state.json"
 
 
 def plan_path(date):
@@ -107,6 +113,21 @@ RESEARCH = {
     # interesting new name always earns the multi-agent analysis before you'd act
     # on it, instead of losing every slot to holdings.
     "reserve_ideas": int(os.environ.get("DESK_RESERVE_IDEAS", "2")),
+}
+
+# The STRATEGIST — the desk's cheap, memory-having, news-aware brain (one
+# OpenRouter/DeepSeek call per run). It reads the deterministic analysis + the
+# live book + recent trades + its own memory + a news digest, then proposes
+# tentative actions and names the (rare) tickers that actually earn deep research.
+# Deep research becomes weekly-sweep + on-demand only; `escalate_cap` is the HARD
+# GLOBAL daily ceiling on weekday deep-research runs (shared by preopen + intraday).
+STRATEGIST = {
+    "enabled":      os.environ.get("DESK_STRATEGIST", "1") == "1",
+    "intraday":     os.environ.get("DESK_STRATEGIST_INTRADAY", "1") == "1",
+    "escalate_cap": int(os.environ.get("DESK_ESCALATE_CAP", "2")),
+    "max_tokens":   int(os.environ.get("DESK_STRATEGIST_MAXTOK", "3500")),
+    "news_per_name": int(os.environ.get("DESK_STRATEGIST_NEWS_NAMES", "4")),
+    "memory_max_bytes": int(os.environ.get("DESK_STRATEGIST_MEM_BYTES", "8000")),
 }
 
 # HBM / AI-memory complex — the user wants these deep-researched harder + more

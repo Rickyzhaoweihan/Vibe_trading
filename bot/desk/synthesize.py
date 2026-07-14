@@ -598,27 +598,53 @@ _SUPERVISE_SYS = (
     "markdown structure. Output ONLY the finalized markdown — no preamble.")
 
 
-def _glm_translate(text, *, timeout=120, max_tokens=6000, system=None):
-    """One GLM/OpenRouter chat call over a markdown chunk (default: translate to
-    Simplified Chinese; pass `system=_SUPERVISE_SYS` for the final QA pass). A plain
-    chat call is far more reliable than the `claude -p` agent, which left long
-    reports half-English. `max_tokens` must be generous or a long chunk gets
-    truncated (which then fails the numeric guard). Returns None on any failure."""
+def openrouter_chat(messages, *, model=None, temperature=0, max_tokens=4000,
+                    timeout=120, reasoning_enabled=False, response_format=None):
+    """One OpenRouter chat-completion call. The single place the desk talks to the
+    OpenRouter API (both the zh translation and the strategist go through here).
+
+    `messages` is the OpenAI-style list. `response_format={"type":"json_object"}`
+    asks for strict JSON (used by the strategist). Returns the assistant text, or
+    None on any failure.
+
+    `reasoning_enabled=False` is important: a reasoning model (e.g. GLM-5.2) left to
+    think spends the whole `max_tokens` budget on chain-of-thought and returns
+    content=None (finish_reason="length"); disabling it makes content come back
+    directly and is a harmless no-op for non-reasoning models."""
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         return None
     try:
         import requests
-        model = os.environ.get("BOT_QUICK_LLM", "z-ai/glm-5.2")
+        model = model or os.environ.get("BOT_QUICK_LLM", "deepseek/deepseek-v4-pro")
+        body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
+                "reasoning": {"enabled": reasoning_enabled}, "messages": messages}
+        if response_format:
+            body["response_format"] = response_format
         r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": model, "temperature": 0, "max_tokens": max_tokens, "messages": [
-                {"role": "system", "content": system or _TRANSLATE_SYS},
-                {"role": "user", "content": text}]},
-            timeout=timeout)
+            json=body, timeout=timeout)
         r.raise_for_status()
         return (r.json()["choices"][0]["message"]["content"] or "").strip() or None
+    except Exception:
+        return None
+
+
+def _glm_translate(text, *, timeout=120, max_tokens=6000, system=None):
+    """One OpenRouter chat call over a markdown chunk (default: translate to
+    Simplified Chinese; pass `system=_SUPERVISE_SYS` for the final QA pass). A plain
+    chat call is far more reliable than the `claude -p` agent, which left long
+    reports half-English. `max_tokens` must be generous or a long chunk gets
+    truncated (which then fails the numeric guard). Returns None on any failure.
+
+    (effort:low is NOT a substitute for reasoning-off — it rewrites "$9.50"→"9.50美元"
+    and trips the numeric guard.)"""
+    try:
+        return openrouter_chat(
+            [{"role": "system", "content": system or _TRANSLATE_SYS},
+             {"role": "user", "content": text}],
+            temperature=0, max_tokens=max_tokens, timeout=timeout)
     except Exception:
         return None
 
