@@ -135,6 +135,24 @@ def build_digest(context):
         L.append(f"💼 账户总值 ${total:,.0f} · 持仓 ${pf.get('total_value',0):,.0f} · "
                  f"可用现金 ${context['cash']:,.0f}{src_s}")
 
+    # The STRATEGIST's own voice — its posture, and where it OVERRODE the carried
+    # deep-research verdict (its distinct judgment, not the mechanical calls).
+    strat = context.get("strategist") or {}
+    if strat:
+        stance = {"raise": "偏防御，倾向提高现金 (raise cash)",
+                  "deploy": "偏进攻，逢低部署现金 (deploy)",
+                  "hold": "维持当前仓位 (hold steady)"}.get(strat.get("cash_stance"), "")
+        ovr = strat.get("overrides") or []
+        bits = []
+        if stance:
+            bits.append(stance)
+        if ovr:
+            downgraded = [o["ticker"] for o in ovr if o["to"] == "KEEP" and o["from"] in ("BUY", "NEW_BUY")]
+            if downgraded:
+                bits.append(f"下调研究看多为持有：{', '.join(downgraded[:5])}")
+        if bits:
+            L.append("🧠 策略台：" + " · ".join(bits))
+
     activity = context.get("activity") or []
     if activity:
         L.append("")

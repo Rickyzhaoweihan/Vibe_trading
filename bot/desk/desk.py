@@ -233,10 +233,19 @@ def run(mode, *, date=None, top=5, research=True, notify=True, llm=False):
                     calls = _merge_by_ticker(calls, deep)
                     research_selected += [{"ticker": r["ticker"], "held": r.get("held", False),
                                            "reasons": ["strategist escalation"]} for r in deep]
-            # merge the strategist's named actions (sized by plan_trades below)
+            # merge the strategist's named actions (sized by plan_trades below).
+            # Track where the strategist DISAGREED with the carried research verdict
+            # (e.g. downgraded a bullish BUY to KEEP / raised cash) so its distinct
+            # judgment is visible in the digest, not silently folded into the calls.
             strat_calls, cash_stance = STRAT.actions_to_calls(
                 strat_result.get("actions", []), holdings=set(holdings))
+            prior = {c["ticker"]: c.get("action") for c in calls}
             calls = _merge_by_ticker(calls, strat_calls)
+            strat_result["cash_stance"] = cash_stance
+            strat_result["overrides"] = [
+                {"ticker": c["ticker"], "from": prior.get(c["ticker"]), "to": c["action"]}
+                for c in strat_calls
+                if prior.get(c["ticker"]) and prior[c["ticker"]] != c["action"]]
 
     # A held hedge instrument (PSQ/SH/SQQQ) is managed by the HEDGE ENGINE, not by
     # rating it as a stock — otherwise deep research emits "SELL PSQ" while the
