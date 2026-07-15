@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Alert notifier: alerts the owner when the bot hits trouble.
 
-Channels, in order:
-  1. macOS notification (always, best effort)
-  2. iMessage to ALERT_IMESSAGE (primary — instant on iPhone)
-  3. Mail.app via AppleScript (fallback; requires Mail signed in)
-  4. Gmail SMTP fallback (only if ALERT_GMAIL_USER/APP_PASSWORD set in .env)
+`ALERT_CHANNEL` (.env) picks the delivery order:
+  email     — Gmail SMTP → Mail.app  (no iMessage; the whole message goes through
+              intact, so a long desk report isn't truncated to 1800 chars)
+  imessage  — iMessage only
+  auto      — iMessage → Mail.app → SMTP (the legacy fallback chain; default)
 
-Recipient contact details come from the environment (.env), not source.
+A macOS notification is always attempted, best-effort.
+
+Recipient contact details come from the environment (.env), not source:
+  ALERT_GMAIL_USER = the sending Gmail account (+ ALERT_GMAIL_APP_PASSWORD)
+  ALERT_EMAIL      = where email is delivered
+  ALERT_IMESSAGE   = the phone for iMessage
 
 Usage: notify.py "subject" [< body_on_stdin]
 """
@@ -21,6 +26,7 @@ from email.message import EmailMessage
 
 TO = os.environ.get("ALERT_EMAIL", "")          # email channels
 IMESSAGE_TO = os.environ.get("ALERT_IMESSAGE", "")  # iMessage channel (owner's phone)
+CHANNEL = os.environ.get("ALERT_CHANNEL", "auto").strip().lower()
 
 
 def macos_notification(subject):
@@ -79,9 +85,11 @@ def applescript_str(s):
 
 def send_via_smtp(subject, body):
     user = os.environ.get("ALERT_GMAIL_USER", "").strip()
-    pw = os.environ.get("ALERT_GMAIL_APP_PASSWORD", "").strip()
+    # Google shows App Passwords as "abcd efgh ijkl mnop" — strip the spaces so a
+    # copy-paste straight from the console works.
+    pw = os.environ.get("ALERT_GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
     if not (user and pw):
-        raise RuntimeError("SMTP creds not configured")
+        raise RuntimeError("SMTP creds not configured (ALERT_GMAIL_USER / ALERT_GMAIL_APP_PASSWORD)")
     msg = EmailMessage()
     msg["From"] = user
     msg["To"] = TO
@@ -93,6 +101,22 @@ def send_via_smtp(subject, body):
         s.send_message(msg)
 
 
+def channel_order():
+    """Delivery attempts, in order, for the configured ALERT_CHANNEL."""
+    imsg = ("iMessage", send_via_imessage, lambda: IMESSAGE_TO)
+    smtp = ("Gmail SMTP", send_via_smtp, lambda: TO)
+    mail = ("Mail.app", send_via_mail_app, lambda: TO)
+    if CHANNEL == "email":
+        # Gmail ONLY — no iMessage (truncates long reports) and no Mail.app
+        # fallback (it would send from whatever account Mail happens to be signed
+        # into, not ALERT_GMAIL_USER). If the App Password is missing we want a
+        # loud failure, not a message from the wrong sender.
+        return [smtp]
+    if CHANNEL == "imessage":
+        return [imsg]
+    return [imsg, mail, smtp]         # "auto" — the legacy fallback chain
+
+
 def main():
     subject = sys.argv[1] if len(sys.argv) > 1 else "Trading bot alert"
     body = "" if sys.stdin.isatty() else sys.stdin.read()
@@ -100,25 +124,16 @@ def main():
 
     macos_notification(subject)
 
-    try:
-        send_via_imessage(full_subject, body or subject)
-        print(f"notify: iMessaged {IMESSAGE_TO}")
-        return 0
-    except Exception as e:
-        print(f"notify: iMessage failed ({e}); trying Mail.app")
-
-    try:
-        send_via_mail_app(full_subject, body or subject)
-        print(f"notify: emailed {TO} via Mail.app")
-        return 0
-    except Exception as e:
-        print(f"notify: Mail.app failed ({e}); trying SMTP")
-
-    try:
-        send_via_smtp(full_subject, body or subject)
-        print(f"notify: emailed {TO} via SMTP")
-    except Exception as e:
-        print(f"notify: all email channels failed ({e}); notification only")
+    errors = []
+    for name, send, target in channel_order():
+        try:
+            send(full_subject, body or subject)
+            print(f"notify: sent to {target()} via {name}")
+            return 0
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+            print(f"notify: {name} failed ({e})")
+    print(f"notify: ALL channels failed ({'; '.join(errors)}); notification only")
     return 0
 
 

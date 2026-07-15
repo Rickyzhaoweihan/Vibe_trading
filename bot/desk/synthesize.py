@@ -55,10 +55,11 @@ def _pretty_date(date):
 
 
 def _short_reason(call):
-    """A clean one-liner reason: drop the sentiment tail and the dev-y
-    '(deep research skipped)' note, clip for the phone."""
+    """A clean reason: drop the sentiment tail and the dev-y '(deep research
+    skipped)' note. Clipped for the phone's 1800-char budget — but on the EMAIL
+    channel there is no length cap, so the full reasoning goes out uncut."""
     r = (call.get("reason") or "").split(" | ")[0].split("(deep research")[0].strip()
-    return r[:96]
+    return r if _email_channel() else r[:96]
 
 
 _ACTIVITY_VERB = {"NEW": "Opened", "CLOSED": "Closed", "ADDED": "Added to",
@@ -157,7 +158,7 @@ def build_digest(context):
     if activity:
         L.append("")
         L.append("📒 Trade monitored — your account changed:")
-        for s in _activity_lines(activity)[:6]:
+        for s in (_activity_lines(activity) if _email_channel() else _activity_lines(activity)[:6]):
             L.append(f"• {s}")
         L.append("↳ re-analyzed against your live book below")
 
@@ -185,7 +186,7 @@ def build_digest(context):
         L.append("")
         L.append("🔎 New ideas: " + ", ".join(
             f"{i['ticker']}({i.get('entry', i['setup'])}{'·分散' if i.get('diversifier') else ''})"
-            for i in ideas[:4]))
+            for i in (ideas if _email_channel() else ideas[:4])))
 
     for w in context.get("ipo_watch") or []:
         px = f"（现价 ${w['last']:,.2f}）" if w.get("last") else "（未上市/无报价）"
@@ -211,6 +212,8 @@ def build_digest(context):
         L.append(f"⚠️ {pf['actions'][0]}")
 
     out = "\n".join(L)
+    if _email_channel():
+        return out                       # email has no length cap — never truncate
     return out[:IMSG_LIMIT - 1] + "…" if len(out) > IMSG_LIMIT else out
 
 
@@ -360,8 +363,16 @@ def _calls_section(calls):
             f"| {c['ticker']} | {hold} | {_money(c.get('price'))} | **{c['action']}** | "
             f"{c.get('conviction') or '—'} | {amt} | "
             f"{_money(c.get('entry_zone'))} | {_money(c.get('stop_loss'))} | {_money(c.get('target'))} | "
-            f"{c.get('when') or '—'} | {(c.get('reason') or '')[:140]} |")
+            f"{c.get('when') or '—'} | {_cell(c.get('reason'))} |")
     return "\n".join(rows) + "\n"
+
+
+def _cell(text):
+    """A reason safe to put in a markdown table cell: newlines flattened and pipes
+    escaped (raw research prose contains both, which used to shatter the table into
+    stray rows). Clipped for the phone; on the EMAIL channel the full text goes out."""
+    t = " ".join((text or "").split()).replace("|", "/")
+    return t if _email_channel() else (t[:140] + "…" if len(t) > 140 else t)
 
 
 def _ideas_section(ideas):
@@ -505,9 +516,17 @@ def _log_message(subject, body, ok):
         pass
 
 
+def _email_channel():
+    """True when ALERT_CHANNEL=email — delivery goes out as one full Gmail rather
+    than chunked iMessage parts."""
+    return os.environ.get("ALERT_CHANNEL", "auto").strip().lower() == "email"
+
+
 def send_imessage(subject, body):
-    """Send via the existing notify.py (iMessage → Mail/SMTP fallback). Every
-    message is logged to logs/desk_messages.jsonl regardless of send outcome."""
+    """Send one message via notify.py, which routes it per ALERT_CHANNEL (email →
+    Gmail SMTP; imessage/auto → the phone). Named for the legacy path; it is the
+    desk's single 'send a message' entry point. Every message is logged to
+    logs/desk_messages.jsonl regardless of send outcome."""
     py = str(conf.ROOT / ".venv" / "bin" / "python")
     ok = False
     try:
@@ -667,29 +686,67 @@ def _glm_translate(text, *, timeout=120, max_tokens=6000, system=None):
         return None
 
 
-def translate_to_zh(text):
-    """Translate a markdown report to Simplified Chinese via direct GLM/OpenRouter
-    calls, CHUNKED by section so no chunk is long enough to get truncated. Each
-    chunk is used only if it preserves every $ amount / % and actually came back in
-    Chinese; a chunk that fails keeps its English (delivery never breaks). Returns
-    the input unchanged only if EVERY chunk failed — so `text != input` means it
-    worked."""
-    if not text or not text.strip():
-        return text
-    import re
-    sections = re.split(r"(?=\n## )", text)
-    chunks, cur = [], ""
-    for sec in sections:
-        if cur and len(cur) + len(sec) > 2800:
-            chunks.append(cur)
+TRANSLATE_CHUNK = 2800
+
+
+def _split_on_lines(text, max_len):
+    """Break `text` into <=max_len pieces on line boundaries (never mid-line)."""
+    out, cur = [], ""
+    for line in text.splitlines(keepends=True):
+        if cur and len(cur) + len(line) > max_len:
+            out.append(cur)
             cur = ""
-        cur += sec
+        cur += line
+    if cur:
+        out.append(cur)
+    return out
+
+
+def translation_chunks(text, max_len=TRANSLATE_CHUNK, *, group=True):
+    """Split a markdown report into translation-sized chunks, always SPLITTING any
+    single oversized `## ` section on line boundaries.
+
+    Splitting the big ones matters: a long section (e.g. the Calls table once its
+    reasons aren't clipped) sent whole overruns `max_tokens`, comes back truncated,
+    drops figures, fails `_tokens_preserved`, and silently falls back to English.
+
+    `group=True` packs small sections together (fewer API calls) — right for the
+    bulk translate pass. `group=False` keeps one chunk per section, which the
+    supervisor needs: it re-touches ONLY the sections still holding English, so
+    merging a clean Chinese section into an English one would re-process (and risk
+    corrupting) text that was already fine."""
+    import re
+    chunks, cur = [], ""
+    for sec in re.split(r"(?=\n## )", text):
+        for piece in ([sec] if len(sec) <= max_len else _split_on_lines(sec, max_len)):
+            if cur and (not group or len(cur) + len(piece) > max_len):
+                chunks.append(cur)
+                cur = ""
+            cur += piece
     if cur.strip():
         chunks.append(cur)
+    return chunks
+
+
+def translate_to_zh(text):
+    """Translate a markdown report to Simplified Chinese via direct OpenRouter
+    calls, CHUNKED so no chunk is long enough to get truncated. Each chunk is used
+    only if it preserves every $ amount / % and actually came back in Chinese; a
+    chunk that fails keeps its English (delivery never breaks). Returns the input
+    unchanged only if EVERY chunk failed — so `text != input` means it worked."""
+    if not text or not text.strip():
+        return text
+    chunks = translation_chunks(text)
 
     def _one(c):
         zh = _glm_translate(c)
-        if zh and _tokens_preserved(c, zh) and (_cjk_ratio(c) < 0.05 or _cjk_ratio(zh) >= 0.4):
+        # Accept when the figures survive AND the result is no less Chinese than the
+        # source. An absolute threshold (">=40% CJK") silently rejected the
+        # figure-dense sections: a faithful translation of a Calls-table row is
+        # legitimately <40% CJK because tickers/prices dominate, and those chunks
+        # already carry some Chinese ("5.76股", carried tags) so they missed the
+        # all-English bypass too — which is why the table kept shipping in English.
+        if zh and _tokens_preserved(c, zh) and _cjk_ratio(zh) >= _cjk_ratio(c):
             return (zh if zh.endswith("\n") else zh + "\n"), True
         return c, False                       # keep this section's English on failure
 
@@ -724,8 +781,11 @@ def supervise_zh(text):
     supervision can only improve delivery, never corrupt it."""
     if not text or not text.strip():
         return text
-    import re
-    sections = re.split(r"(?=\n## )", text)
+    # One chunk per section (group=False) so we only re-touch the sections still
+    # holding English — but oversized sections are still SPLIT, since sending one
+    # whole would overrun max_tokens, come back truncated, fail the figure guard,
+    # and be discarded, leaving exactly the English we're here to fix.
+    sections = translation_chunks(text, group=False)
 
     def _fix(sec):
         if not sec.strip() or not _has_english_prose(sec):
@@ -752,25 +812,30 @@ def supervise_zh(text):
 
 
 def _tokens_preserved(src, out):
-    """True if every DOLLAR AMOUNT and PERCENTAGE in `src` survives (count-wise) in
-    `out`. Guards the translation relay from mangling a placeable figure (a stop,
-    a size, a level) — the one failure that actually matters on the phone.
+    """True if every DOLLAR AMOUNT and PERCENTAGE in `src` survives in `out`.
+    Guards the translation relay from mangling a placeable figure (a stop, a size,
+    a level) — the one failure that actually matters.
+
+    The figure must survive as a NUMBER, not as a literal glyph: a faithful Chinese
+    translation legitimately renders "$28.40" as "28.40美元" and "5%" as "5%"/"百分之5",
+    so demanding the "$" itself rejected perfectly good translations and dropped the
+    figure-dense sections (the Calls table, headlines) back to English. We therefore
+    take the figures FROM `src` (where they're unambiguously $/%-marked) and only
+    require that each one still appears somewhere in `out` as that number.
 
     Deliberately does NOT check bare integers or ALL-CAPS tokens: a faithful
-    Chinese translation legitimately renders "top-3"→"前三", "10Y"→"10年期",
-    "SELL"→"卖出" etc., and flagging those caused spurious English fallbacks.
+    translation renders "top-3"→"前三", "10Y"→"10年期", "SELL"→"卖出".
     Commas in thousands are normalized so "$9,988" == "$9988"."""
     import re
-    def figs(s):
-        s = re.sub(r"(?<=\d),(?=\d)", "", s)                      # 9,988 -> 9988
-        dollars = re.findall(r"\$\s?(\d+(?:\.\d+)?)", s)          # $ amounts / levels
-        pcts = re.findall(r"(\d+(?:\.\d+)?)\s?%", s)              # percentages
-        return Counter(dollars), Counter(pcts)
-    sd, sp = figs(src)
-    od, op = figs(out)
-    if any(od.get(k, 0) < v for k, v in sd.items()):
+    def _norm(s):
+        return re.sub(r"(?<=\d),(?=\d)", "", s)                   # 9,988 -> 9988
+    src, out = _norm(src), _norm(out)
+    src_d = Counter(re.findall(r"\$\s?(\d+(?:\.\d+)?)", src))     # $ amounts / levels
+    src_p = Counter(re.findall(r"(\d+(?:\.\d+)?)\s?%", src))      # percentages
+    out_nums = Counter(re.findall(r"(\d+(?:\.\d+)?)", out))       # any number, however decorated
+    if any(out_nums.get(k, 0) < v for k, v in src_d.items()):
         return False
-    if any(op.get(k, 0) < v for k, v in sp.items()):
+    if any(out_nums.get(k, 0) < v for k, v in src_p.items()):
         return False
     return True
 
@@ -878,10 +943,15 @@ def send_imessage_file(path, *, target=None):
 
 
 def deliver(context, *, notify=True):
-    """Write the English report, then (optionally) text a short decision digest +
-    a styled PDF of the full report — translated to the configured delivery
-    language. Falls back to chunked text if the PDF can't be rendered/sent.
-    Returns (path, digest)."""
+    """Write the English report, then (optionally) deliver it — translated to the
+    configured delivery language. Returns (path, digest).
+
+    Channel (`ALERT_CHANNEL`):
+      email    — ONE message: the decision digest on top, then the FULL report.
+                 Email has no length cap, so nothing is chunked or truncated.
+      otherwise— the legacy phone path: a short digest + the report as ordered
+                 1800-char iMessage parts.
+    """
     conf.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     report = build_report_md(context)
     digest = build_digest(context)
@@ -892,8 +962,8 @@ def deliver(context, *, notify=True):
 
     out_digest, out_report, suffix = digest, report, ""
     if conf.DELIVER_LANG == "zh":
-        # translate, then a GLM supervisor re-reads the result and fixes any English
-        # the first pass missed + checks coherence — figures stay locked throughout.
+        # translate, then a supervisor re-reads the result and fixes any English the
+        # first pass missed + checks coherence — figures stay locked throughout.
         out_report = supervise_zh(translate_to_zh(report))
         out_digest = supervise_zh(translate_to_zh(digest))
         suffix = "_zh"
@@ -903,8 +973,12 @@ def deliver(context, *, notify=True):
             pass
 
     if notify:
-        send_imessage(f"{conf.MSG_PREFIX} {mode} {date}", out_digest)         # quick decision digest
-        send_report(f"{conf.MSG_PREFIX} report {date}", md_to_text(out_report))  # readable text, tables flattened
+        if _email_channel():
+            body = out_digest + "\n\n" + ("─" * 32) + "\n\n" + md_to_text(out_report)
+            send_imessage(f"{conf.MSG_PREFIX} {mode} {date}", body)   # routed to Gmail by notify.py
+        else:
+            send_imessage(f"{conf.MSG_PREFIX} {mode} {date}", out_digest)         # quick decision digest
+            send_report(f"{conf.MSG_PREFIX} report {date}", md_to_text(out_report))  # chunked parts
     return path, digest
 
 

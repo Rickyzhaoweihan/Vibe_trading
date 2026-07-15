@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -60,11 +61,18 @@ def horizon_of(action):
             "KEEP": "hold — multi-week"}.get(action, "multi-week")
 
 
+# How much of the analysts' plan to keep on a call. This is stored (coverage.json /
+# journal) and rendered, so it bounds both. 280 chars was sized for an iMessage and
+# cut the reasoning mid-sentence; the email channel has no length budget, so keep
+# enough for the full argument. Override with DESK_REASON_CHARS.
+REASON_CHARS = int(os.environ.get("DESK_REASON_CHARS", "1200"))
+
+
 def _reason(info, sent):
     plan = (info.get("trader_plan") or info.get("final_decision") or "").strip()
     plan = " ".join(plan.split())
-    if len(plan) > 280:
-        plan = plan[:280] + "…"
+    if len(plan) > REASON_CHARS:
+        plan = plan[:REASON_CHARS] + "…"
     tail = f" | sentiment: {sent}" if sent else ""
     return (plan or "no research text") + tail
 
