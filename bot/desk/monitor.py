@@ -42,6 +42,7 @@ import sectors as L2
 import synthesize as L6
 import health as H
 import snapshot as SNAP
+import strategist as STRAT
 import trading_calendar as cal
 
 ET = ZoneInfo("America/New_York")
@@ -270,7 +271,55 @@ def _fresh(triggers, state, date, *, now_min=None, refire_minutes=None):
 
 # ---- one tick -----------------------------------------------------------
 
-def tick(holdings, *, cfg=None, dry=False, llm=False, date=None):
+# Book-wide macro/geopolitics-grade triggers that justify waking the strategist
+# for a quick tentative-action read. Per-name move/entry/stop triggers stay on the
+# cheap deterministic path — they don't need the LLM.
+_STRAT_KINDS = ("rates", "vix", "unwind", "btc")
+
+
+def _intraday_strategist(fresh, market, vix, holdings, pos_doc, date):
+    """On a qualifying macro/unwind trigger, ask the strategist for 1–2 tentative
+    actions (advice text only — NO synchronous deep research; any escalation defers
+    to the next scheduled desk run). Deduped per day on the qualifying-trigger set
+    so the same macro read doesn't re-fire every tick. Returns markdown lines or ""."""
+    q = [t for t in fresh if t.get("kind") in _STRAT_KINDS]
+    if not q or not (conf.STRATEGIST.get("enabled") and conf.STRATEGIST.get("intraday")):
+        return ""
+    fp = "|".join(sorted(t["kind"] for t in q))
+    st = STRAT.load_state()
+    if st.get("date") == date and st.get("last_intraday_hash") == fp:
+        return ""                                   # same macro read already handled today
+    try:
+        macro = L1.macro_read(market=market, vix=vix); macro.pop("_market", None)
+        leaders = [s for s in holdings if conf.is_momentum_bet(s)]
+        unwind = L2.unwind_read(market, leaders, vix=vix)
+        positions = (pos_doc or {}).get("positions", [])
+        ctx = {"date": date, "mode": "intraday", "macro": macro, "unwind": unwind,
+               "portfolio": {"positions": positions},
+               "calls": [{"ticker": s, "action": "KEEP", "conviction": "low"} for s in holdings],
+               "cash": (pos_doc or {}).get("cash", 0.0) or 0.0,
+               "triggers": [t.get("detail") for t in q],
+               "ideas": {"equity": []}, "activity": [], "review": {},
+               "pulse": {"vix": {"pct": None}}}
+        res = STRAT.run_strategist(ctx, mode="intraday", date=date, intraday=True)
+    except Exception:
+        res = None
+    st = st if st.get("date") == date else {"date": date}
+    st["last_intraday_hash"] = fp
+    STRAT.save_state(st)
+    if not res:
+        return ""
+    lines = []
+    for a in (res.get("actions") or [])[:2]:
+        act, tkr = (a.get("action") or "").upper(), (a.get("ticker") or "").upper()
+        if act in ("KEEP", "WATCH", "") or not tkr:
+            continue
+        why = (a.get("reason") or "").strip()
+        lines.append(f"🧠 策略：{act} {tkr} — {why[:120]}")
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
+def tick(holdings, *, cfg=None, dry=False, llm=False, strategist=False, date=None):
     cfg = cfg or conf.ALERT
     date = date or datetime.now(ET).strftime("%Y-%m-%d")
     plan = load_plan(date)
@@ -333,6 +382,13 @@ def tick(holdings, *, cfg=None, dry=False, llm=False, date=None):
             # deterministic body verbatim.
             if sharpened and L6._tokens_preserved(sharpened, body):
                 body = sharpened
+        # On a book-wide macro/geopolitics move, append the strategist's tentative
+        # action(s) — the "buy SQQQ now" read the user asked for. Guarded like the
+        # sharpened text: only append figures that survive the numeric check.
+        if strategist:
+            extra = _intraday_strategist(fresh, market, vix, holdings, pos_doc, date)
+            if extra and L6._tokens_preserved(body + extra, body + extra):
+                body += extra
         L6.send_imessage(f"{conf.MSG_PREFIX} ALERT {date}", body)
         _save_state(state)
     return {"all": triggers, "fresh": fresh, "sent": bool(fresh)}
@@ -363,6 +419,8 @@ def main():
     ap.add_argument("--once", action="store_true", help="run a single tick and exit")
     ap.add_argument("--dry", action="store_true", help="compute + print triggers, send nothing")
     ap.add_argument("--llm", action="store_true")
+    ap.add_argument("--strategist", action="store_true",
+                    help="on a book-wide macro/unwind move, append the strategist's tentative action")
     ap.add_argument("--interval", type=int, default=conf.ALERT["tick_seconds"])
     args = ap.parse_args()
 
@@ -370,7 +428,8 @@ def main():
     holdings = [p["symbol"] for p in pos.get("positions", [])] or list(conf.HOLDINGS)
 
     if args.once:
-        print(json.dumps(tick(holdings, dry=args.dry, llm=args.llm), indent=2, default=str))
+        print(json.dumps(tick(holdings, dry=args.dry, llm=args.llm,
+                              strategist=args.strategist), indent=2, default=str))
         return
 
     today = datetime.now(ET).strftime("%Y-%m-%d")
@@ -391,7 +450,7 @@ def main():
                     if new_holdings:
                         holdings = new_holdings
             ticks += 1
-            res = tick(holdings, dry=args.dry, llm=args.llm)
+            res = tick(holdings, dry=args.dry, llm=args.llm, strategist=args.strategist)
             errors = 0
             if res["fresh"]:
                 print(f"[{datetime.now(ET):%H:%M}] alerted: {[t['kind'] for t in res['fresh']]}", flush=True)

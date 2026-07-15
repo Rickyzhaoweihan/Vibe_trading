@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "TradingAgents"))
 
 _MACRO_CACHE = {}   # date -> digest
 _SENT_CACHE = {}    # ticker -> digest
+_TNEWS_CACHE = {}   # (ticker, date) -> digest
 
 
 def _clip(text, n):
@@ -53,6 +54,28 @@ def sentiment(ticker, *, limit=30, max_chars=500):
     except Exception:
         digest = ""
     _SENT_CACHE[ticker] = digest
+    return digest
+
+
+def ticker_news(ticker, date, *, look_back_days=7, max_chars=700):
+    """A compact per-ticker news digest for `ticker` as of `date` (yyyy-mm-dd),
+    from the same `get_news` tool the deep-research news analyst uses (yfinance,
+    keyless). Cached per (ticker, date). Empty string on failure."""
+    key = (ticker, date)
+    if key in _TNEWS_CACHE:
+        return _TNEWS_CACHE[key]
+    digest = ""
+    try:
+        from datetime import date as _date, timedelta
+        from tradingagents.agents.utils.news_data_tools import get_news
+        end = date
+        y, m, d = map(int, date.split("-"))
+        start = (_date(y, m, d) - timedelta(days=look_back_days)).isoformat()
+        raw = get_news.invoke({"ticker": ticker, "start_date": start, "end_date": end})
+        digest = _clip(raw, max_chars)
+    except Exception:
+        digest = ""
+    _TNEWS_CACHE[key] = digest
     return digest
 
 

@@ -35,7 +35,7 @@ case "$MODE" in
     $PY bot/trading_calendar.py --sleep-until-open
     snapshot_positions
     log "starting intraday monitor"
-    exec $PY bot/desk/monitor.py --llm
+    exec $PY bot/desk/monitor.py --llm --strategist
     ;;
   preopen|wrap)
     $PY bot/trading_calendar.py --check-today || { log "not a trading day"; exit 0; }

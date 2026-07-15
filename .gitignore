@@ -11,6 +11,7 @@ bot/state.json
 bot/desk/positions.json
 bot/desk/positions_prev.json
 bot/desk/state.json
+bot/desk/strategist_state.json
 bot/desk/coverage.json
 bot/desk/plan_*.json
 bot/desk/_*.json
